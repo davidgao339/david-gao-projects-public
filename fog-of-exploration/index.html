@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fog of Exploration</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #header {
+      padding: 8px 16px;
+      background: #16213e;
+      border-bottom: 1px solid #0f3460;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+
+    #header h1 { font-size: 1rem; color: #e2b96f; white-space: nowrap; }
+
+    .btn {
+      background: #0f3460;
+      border: 1px solid #e2b96f55;
+      color: #ddd;
+      padding: 5px 11px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      white-space: nowrap;
+    }
+    .btn:hover { background: #e2b96f; color: #1a1a2e; }
+    .btn.danger { border-color: #e2555555; }
+    .btn.danger:hover { background: #c0392b; color: #fff; }
+
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+      color: #aaa;
+    }
+    .control-group input[type=range] { width: 80px; cursor: pointer; }
+
+    #stats { margin-left: auto; font-size: 0.78rem; color: #888; white-space: nowrap; }
+
+    #map { flex: 1; }
+
+    #file-input { display: none; }
+
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(80px);
+      background: #e2b96f;
+      color: #1a1a2e;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: transform 0.3s ease;
+      pointer-events: none;
+      z-index: 9999;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <h1>Fog of Exploration</h1>
+
+  <button class="btn" onclick="document.getElementById('file-input').click()">
+    Import GPX / Timeline JSON
+  </button>
+  <input type="file" id="file-input" accept=".gpx,.json" multiple onchange="handleFiles(this.files)">
+
+  <div class="control-group">
+    <label for="fog-opacity">Fog</label>
+    <input type="range" id="fog-opacity" min="0" max="100" value="82"
+           oninput="setOpacity(this.value)">
+  </div>
+
+  <div class="control-group">
+    <label>
+      <input type="checkbox" id="show-tracks" checked onchange="toggleTracks(this.checked)">
+      Tracks
+    </label>
+  </div>
+
+  <button class="btn danger" onclick="clearAll()">Clear All</button>
+
+  <div id="stats">0 tiles explored</div>
+</div>
+
+<div id="map"></div>
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+const TRACK_ZOOM  = 14;   // grid resolution — zoom 14 ≈ 2.4 km tiles
+const STORAGE_KEY = 'fog-visited-tiles-z' + TRACK_ZOOM;
+const FOG_COLOR   = '15, 20, 40';  // RGB for the fog fill
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
+let fogOpacity  = 0.82;
+let visitedTiles = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'));
+
+// ─── Map setup ────────────────────────────────────────────────────────────────
+
+const map = L.map('map', { zoomControl: true }).setView([43.6532, -79.3832], 12); // Toronto
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/">CARTO</a>',
+  subdomains: 'abcd',
+  maxZoom: 19,
+}).addTo(map);
+
+// ─── Fog layer (custom GridLayer) ─────────────────────────────────────────────
+
+const FogLayer = L.GridLayer.extend({
+  createTile(coords) {
+    const canvas = document.createElement('canvas');
+    const size   = this.getTileSize();
+    canvas.width  = size.x;
+    canvas.height = size.y;
+
+    if (isTileVisited(coords.z, coords.x, coords.y)) return canvas;
+
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = `rgba(${FOG_COLOR}, ${fogOpacity})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+});
+
+const fogLayer = new FogLayer({ pane: 'overlayPane', zIndex: 500 });
+fogLayer.addTo(map);
+
+// ─── Track layer ──────────────────────────────────────────────────────────────
+
+const trackLayer = L.layerGroup().addTo(map);
+
+function toggleTracks(visible) {
+  if (visible) map.addLayer(trackLayer);
+  else map.removeLayer(trackLayer);
+}
+
+// ─── Tile math ────────────────────────────────────────────────────────────────
+
+// Convert lat/lng to tile x,y at TRACK_ZOOM
+function latlngToTile(lat, lng) {
+  const n      = 1 << TRACK_ZOOM;
+  const x      = Math.floor((lng + 180) / 360 * n);
+  const latRad = lat * Math.PI / 180;
+  const y      = Math.floor(
+    (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n
+  );
+  return { x, y };
+}
+
+// Convert tile x,y at TRACK_ZOOM back to lat/lng (NW corner)
+function tileToLatlng(x, y) {
+  const n   = 1 << TRACK_ZOOM;
+  const lng = x / n * 360 - 180;
+  const r   = Math.PI - 2 * Math.PI * y / n;
+  const lat = 180 / Math.PI * Math.atan(0.5 * (Math.exp(r) - Math.exp(-r)));
+  return [lat, lng];
+}
+
+// Check whether a display tile (z, x, y) is covered by a visited tracking tile
+function isTileVisited(z, x, y) {
+  if (z >= TRACK_ZOOM) {
+    // Map display tile to its TRACK_ZOOM parent
+    const diff = z - TRACK_ZOOM;
+    return visitedTiles.has(`${x >> diff},${y >> diff}`);
+  } else {
+    // This display tile covers multiple TRACK_ZOOM tiles — visited if any child is
+    const diff  = TRACK_ZOOM - z;
+    const baseX = x << diff;
+    const baseY = y << diff;
+    const span  = 1 << diff;
+    for (let dx = 0; dx < span; dx++) {
+      for (let dy = 0; dy < span; dy++) {
+        if (visitedTiles.has(`${baseX + dx},${baseY + dy}`)) return true;
+      }
+    }
+    return false;
+  }
+}
+
+function tileKey(x, y) { return `${x},${y}`; }
+
+// ─── Import ───────────────────────────────────────────────────────────────────
+
+async function handleFiles(files) {
+  if (!files.length) return;
+
+  let added    = 0;
+  let firstLat = null;
+  let firstLng = null;
+
+  function markPoint(lat, lng) {
+    if (isNaN(lat) || isNaN(lng)) return;
+    if (firstLat === null) { firstLat = lat; firstLng = lng; }
+    const { x, y } = latlngToTile(lat, lng);
+    const before = visitedTiles.size;
+    visitedTiles.add(tileKey(x, y));
+    if (visitedTiles.size > before) added++;
+  }
+
+  // "43.626752°, -79.478686°"  →  [lat, lng] or null
+  function parseLatLng(str) {
+    if (!str) return null;
+    const parts = str.replace(/°/g, '').split(',');
+    const lat = parseFloat(parts[0]), lng = parseFloat(parts[1]);
+    return (isNaN(lat) || isNaN(lng)) ? null : [lat, lng];
+  }
+
+  let bounds = null;
+  function expandBounds(lat, lng) {
+    if (!bounds) bounds = L.latLngBounds([[lat, lng], [lat, lng]]);
+    else bounds.extend([lat, lng]);
+  }
+
+  for (const file of files) {
+    const text = await file.text();
+
+    if (file.name.endsWith('.json')) {
+      // ── Google Timeline JSON ────────────────────────────────────────────
+      let data;
+      try { data = JSON.parse(text); } catch {
+        toast(`${file.name}: not valid JSON`); continue;
+      }
+
+      for (const seg of (data.semanticSegments || [])) {
+        // timelinePath — draw as a polyline and mark tiles
+        const pathPts = [];
+        for (const p of (seg.timelinePath || [])) {
+          const ll = parseLatLng(p.point);
+          if (!ll) continue;
+          pathPts.push(ll);
+          markPoint(ll[0], ll[1]);
+          expandBounds(ll[0], ll[1]);
+        }
+        if (pathPts.length > 1) {
+          L.polyline(pathPts, { color: '#e2b96f', weight: 2, opacity: 0.7 }).addTo(trackLayer);
+        } else if (pathPts.length === 1) {
+          L.circleMarker(pathPts[0], { radius: 3, color: '#e2b96f', fillOpacity: 0.8 }).addTo(trackLayer);
+        }
+
+        // activity start/end
+        if (seg.activity) {
+          for (const key of ['start', 'end']) {
+            const ll = parseLatLng(seg.activity[key]?.latLng);
+            if (ll) { markPoint(ll[0], ll[1]); expandBounds(ll[0], ll[1]); }
+          }
+        }
+
+        // visit
+        const visitLL = parseLatLng(seg.visit?.topCandidate?.placeLocation?.latLng);
+        if (visitLL) { markPoint(visitLL[0], visitLL[1]); expandBounds(visitLL[0], visitLL[1]); }
+      }
+
+    } else {
+      // ── GPX ──────────────────────────────────────────────────────────────
+      const doc = new DOMParser().parseFromString(text, 'application/xml');
+      if (doc.querySelector('parsererror')) {
+        toast(`${file.name}: not valid XML`); continue;
+      }
+      const pathPts = [];
+      for (const pt of doc.querySelectorAll('trkpt, wpt, rtept')) {
+        const lat = parseFloat(pt.getAttribute('lat'));
+        const lng = parseFloat(pt.getAttribute('lon'));
+        if (isNaN(lat) || isNaN(lng)) continue;
+        pathPts.push([lat, lng]);
+        markPoint(lat, lng);
+        expandBounds(lat, lng);
+      }
+      if (pathPts.length > 1) {
+        L.polyline(pathPts, { color: '#e2b96f', weight: 2, opacity: 0.7 }).addTo(trackLayer);
+      }
+    }
+  }
+
+  persist();
+
+  if (bounds) map.flyToBounds(bounds.pad(0.1), { maxZoom: 14 });
+
+  toast(`+${added} new tile${added !== 1 ? 's' : ''} from ${files.length} file${files.length !== 1 ? 's' : ''}`);
+  document.getElementById('file-input').value = '';
+}
+
+// ─── Click to toggle a tile ───────────────────────────────────────────────────
+
+map.on('click', (e) => {
+  const { x, y } = latlngToTile(e.latlng.lat, e.latlng.lng);
+  const key = tileKey(x, y);
+  if (visitedTiles.has(key)) {
+    visitedTiles.delete(key);
+  } else {
+    visitedTiles.add(key);
+  }
+  persist();
+});
+
+// ─── Fog opacity ──────────────────────────────────────────────────────────────
+
+function setOpacity(val) {
+  fogOpacity = val / 100;
+  fogLayer.redraw();
+}
+
+// ─── Clear all ────────────────────────────────────────────────────────────────
+
+function clearAll() {
+  if (!confirm(`Clear all ${visitedTiles.size} explored tiles?`)) return;
+  visitedTiles.clear();
+  trackLayer.clearLayers();
+  persist();
+  toast('Cleared');
+}
+
+// ─── Persistence & UI ─────────────────────────────────────────────────────────
+
+function persist() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify([...visitedTiles]));
+  updateStats();
+  fogLayer.redraw();
+}
+
+function updateStats() {
+  document.getElementById('stats').textContent =
+    `${visitedTiles.size.toLocaleString()} tile${visitedTiles.size !== 1 ? 's' : ''} explored`;
+}
+
+let toastTimer;
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+
+updateStats();
+</script>
+</body>
+</html>
