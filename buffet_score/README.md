@@ -4,6 +4,8 @@ A stock analyser built around Warren Buffett's publicly documented investment me
 
 Data is fetched live from Yahoo Finance (no API key required).
 
+![Buffett Score App](buffet_score.png)
+
 ---
 
 ## What does it do?
