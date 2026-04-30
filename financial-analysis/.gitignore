@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Screener cache (live data from Yahoo Finance, no need to commit)
+.screener_cache/
+
+# Test cache
+.pytest_cache/
+
+# CSV outputs
+buffett_scores_*.csv
+
+# Streamlit
+.streamlit/secrets.toml
