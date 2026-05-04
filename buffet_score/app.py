@@ -120,8 +120,8 @@ def build_explanation(sd, r: dict, m: dict, verdict: str) -> list[tuple[str, str
         if avg_roe >= 20:
             parts.append((
                 f"Return on equity averages {avg_roe:.1f}% — comfortably above our informal 20% threshold. "
-                "A business that consistently earns high returns on equity without gorging on debt "
-                "is compounding its owners' wealth year after year, whether the stock moves or not. "
+                "A business that consistently earns high returns on equity is compounding its owners' "
+                "wealth year after year, whether the stock moves or not. "
                 "That is the engine Berkshire has ridden for sixty years.",
                 "positive"
             ))
@@ -137,6 +137,21 @@ def build_explanation(sd, r: dict, m: dict, verdict: str) -> list[tuple[str, str
                 f"A return on equity of {avg_roe:.1f}% tells us the business requires large amounts of capital "
                 "to produce modest returns. That is the opposite of what we look for. "
                 "Great businesses generate cash; they do not consume it.",
+                "negative"
+            ))
+
+    # ── ROE/ROIC divergence warning ──────────
+    valid_roic_chk = [r_ for r_ in (sd.roic_values or []) if r_ and not np.isnan(r_)]
+    if valid_roe and valid_roic_chk:
+        chk_roe  = np.mean(valid_roe)  * 100
+        chk_roic = np.mean(valid_roic_chk) * 100
+        if chk_roe > 30 and chk_roic < 13:
+            parts.append((
+                f"One caution worth noting: the return on equity ({chk_roe:.0f}%) is far above "
+                f"the return on invested capital ({chk_roic:.1f}%). When those two figures diverge "
+                "significantly, it typically means debt — not business quality — is amplifying "
+                "the reported equity returns. We have always preferred businesses that earn well "
+                "on capital before leverage enters the picture. High ROE alone is not a moat.",
                 "negative"
             ))
 
@@ -239,6 +254,154 @@ def build_explanation(sd, r: dict, m: dict, verdict: str) -> list[tuple[str, str
     ))
 
     return parts
+
+
+# ─────────────────────────────────────────────
+# SCORE BREAKDOWN CONTEXT
+# ─────────────────────────────────────────────
+
+def build_score_context(sd, r: dict) -> dict:
+    """Return plain-English threshold explanations for each scoring criterion."""
+    ctx = {}
+
+    # ── EPS Consistency ──
+    data = sd.eps_history if sd.eps_history else sd.net_income_history
+    if data:
+        total     = len(data)
+        profitable = sum(1 for x in data if x and x > 0)
+        valid      = [x for x in data if x and x > 0]
+        cons_note  = f"{profitable}/{total} years profitable"
+        if len(valid) >= 2:
+            n    = len(valid) - 1
+            cagr = ((valid[0] / valid[-1]) ** (1 / n) - 1) * 100
+            if cagr >= 10:
+                g = f"CAGR {cagr:.1f}% — excellent (≥10% = full growth credit)"
+            elif cagr >= 7:
+                g = f"CAGR {cagr:.1f}% — good (≥10% for full marks)"
+            elif cagr >= 4:
+                g = f"CAGR {cagr:.1f}% — fair (≥10% for full marks)"
+            elif cagr >= 0:
+                g = f"CAGR {cagr:.1f}% — below target (≥10% for full marks)"
+            else:
+                g = f"CAGR {cagr:.1f}% — earnings declining, near-zero growth credit"
+        else:
+            g = "Insufficient history to compute CAGR"
+        ctx["EPS Consistency"] = f"{cons_note}  ·  {g}"
+    else:
+        ctx["EPS Consistency"] = "No earnings data available"
+
+    # ── Return on Equity ──
+    valid_roe = [x for x in (sd.roe_values or []) if x is not None and not np.isnan(x)]
+    if valid_roe:
+        avg_roe     = np.mean(valid_roe) * 100
+        below_15    = sum(1 for x in valid_roe if x * 100 < 15)
+        roe_line    = f"Avg ROE {avg_roe:.1f}% ({'above' if avg_roe >= 20 else 'below'} 20% threshold)"
+        if below_15:
+            roe_line += f"  ·  {below_15}/{len(valid_roe)} years below 15% — consistency penalty"
+        if sd.debt_to_equity is not None:
+            de = sd.debt_to_equity / 100 if sd.debt_to_equity > 10 else sd.debt_to_equity
+            if de > 2:
+                factor = max(0.4, 1 - (de - 2) * 0.12)
+                roe_line += (f"  ·  D/E {de:.1f}x exceeds 2× leverage limit — "
+                             f"score reduced by {(1-factor)*100:.0f}% (debt inflates ROE)")
+        ctx["Return on Equity"] = roe_line
+    else:
+        ctx["Return on Equity"] = "No ROE data available"
+
+    # ── ROIC ──
+    valid_roic = [x for x in (sd.roic_values or []) if x is not None and not np.isnan(x)]
+    if valid_roic:
+        avg = np.mean(valid_roic) * 100
+        if avg >= 22:
+            tier = "excellent (≥22% = full marks)"
+        elif avg >= 17:
+            tier = "good (≥17% threshold met)"
+        elif avg >= 13:
+            tier = "fair — below 17% target"
+        elif avg >= 9:
+            tier = "weak — target ≥17%"
+        else:
+            tier = "very low — target ≥17%"
+        ctx["ROIC"] = (f"Avg ROIC {avg:.1f}% — {tier}  ·  "
+                       "measures returns on all capital including debt (thresholds: ≥22% full, ≥17% good, ≥13% fair, ≥9% weak)")
+    else:
+        ctx["ROIC"] = "ROIC data unavailable — no partial credit awarded"
+
+    # ── Profit Margins ──
+    gm = (sd.gross_margin or 0) * 100
+    nm = (sd.net_margin  or 0) * 100
+    gm_tier = ("≥60% = exceptional" if gm >= 60
+               else "≥40% moat signal" if gm >= 40
+               else "≥25% thin" if gm >= 25
+               else "below 25% — commodity-like")
+    nm_tier = ("≥20% = full marks" if nm >= 20
+               else "≥15% good" if nm >= 15
+               else "≥10% acceptable" if nm >= 10
+               else "below 10% — below target")
+    ctx["Profit Margins"] = f"Gross {gm:.0f}% ({gm_tier})  ·  Net {nm:.0f}% ({nm_tier})"
+
+    # ── Debt & Liquidity ──
+    parts = []
+    if sd.debt_to_equity is not None:
+        de = sd.debt_to_equity / 100 if sd.debt_to_equity > 10 else sd.debt_to_equity
+        parts.append(f"D/E {de:.1f}× ({'≤0.5 target' if de <= 0.5 else '≤1× ok' if de <= 1 else '≤2× elevated' if de <= 2 else 'above 2× — fails'})")
+    if sd.long_term_debt is not None:
+        ni_pos = [x for x in (sd.net_income_history or []) if x and x > 0]
+        if ni_pos:
+            lt = sd.long_term_debt / np.mean(ni_pos)
+            parts.append(f"LT debt {lt:.1f}× NI ({'≤2× excellent' if lt <= 2 else '≤5× acceptable' if lt <= 5 else '≤8× elevated' if lt <= 8 else 'above 8× — fails'})")
+    if sd.current_ratio is not None:
+        cr = sd.current_ratio
+        parts.append(f"Current ratio {cr:.1f} ({'≥2.0 strong' if cr >= 2 else '≥1.5 target' if cr >= 1.5 else '≥1.0 marginal' if cr >= 1 else 'below 1.0 — short-term risk'})")
+    ebit = sd.ebit_history[0] if sd.ebit_history else None
+    ie   = sd.interest_expense_history[0] if sd.interest_expense_history else None
+    if ebit and ie and ie > 0:
+        ic = ebit / ie
+        parts.append(f"Interest coverage {ic:.1f}× ({'≥10× excellent' if ic >= 10 else '≥8× target' if ic >= 8 else '≥5× marginal' if ic >= 5 else 'below 5× — risk'})")
+    ctx["Debt & Liquidity"] = ("  ·  ".join(parts) + "  ·  score = average of all sub-checks"
+                                if parts else "Insufficient data")
+
+    # ── Owner Earnings Yield ──
+    valid_oe = [x for x in (sd.owner_earnings_history or []) if x is not None and not np.isnan(x)]
+    if valid_oe and sd.market_cap:
+        yld = np.mean(valid_oe) / sd.market_cap * 100
+        tier = ("≥9% = full marks" if yld >= 9
+                else "≥7% good" if yld >= 7
+                else "≥5% fair" if yld >= 5
+                else "≥3% weak" if yld >= 3
+                else "below 3% — very low")
+        ctx["Owner Earnings Yld"] = (f"OE yield {yld:.1f}% — {tier}  ·  "
+                                     "owner earnings = Net Income + D&A − CapEx ÷ market cap  ·  thresholds: ≥9% full, ≥7% good, ≥5% fair")
+    elif sd.trailing_pe:
+        yld = (1 / sd.trailing_pe) * 100
+        ctx["Owner Earnings Yld"] = (f"Earnings yield {yld:.1f}% (P/E {sd.trailing_pe:.1f}×, estimated — owner earnings unavailable)  ·  target yield ≥7%")
+    else:
+        ctx["Owner Earnings Yld"] = "No valuation data available"
+
+    # ── Capital Allocation ──
+    valid_ni  = [x for x in (sd.net_income_history or []) if x and x > 0]
+    valid_eps = [x for x in (sd.eps_history or [])        if x and x > 0]
+    ca_parts  = []
+    ni_cagr = eps_cagr = None
+    if len(valid_ni) >= 2:
+        ni_cagr = ((valid_ni[0] / valid_ni[-1]) ** (1 / (len(valid_ni) - 1)) - 1) * 100
+        ca_parts.append(f"NI CAGR {ni_cagr:.1f}%")
+    if len(valid_eps) >= 2:
+        eps_cagr = ((valid_eps[0] / valid_eps[-1]) ** (1 / (len(valid_eps) - 1)) - 1) * 100
+        tier = ("≥12% = full marks" if eps_cagr >= 12
+                else "≥8% good" if eps_cagr >= 8
+                else "≥5% fair" if eps_cagr >= 5
+                else "≥2% below target" if eps_cagr >= 2
+                else "≥0% weak" if eps_cagr >= 0
+                else "negative — declining per-share value")
+        ca_parts.append(f"EPS CAGR {eps_cagr:.1f}% — {tier} (primary metric)")
+        if ni_cagr is not None and (ni_cagr - eps_cagr) > 5:
+            ca_parts.append(f"NI outpaced EPS by {ni_cagr - eps_cagr:.1f}pp → dilution detected, penalty applied")
+        elif ni_cagr is not None and (eps_cagr - ni_cagr) > 2:
+            ca_parts.append("EPS outpacing NI → buyback bonus applied")
+    ctx["Capital Allocation"] = ("  ·  ".join(ca_parts)
+                                  if ca_parts else "Insufficient data")
+    return ctx
 
 
 # ─────────────────────────────────────────────
@@ -447,6 +610,17 @@ if (analyse_clicked or auto_run) and ticker_input:
         unsafe_allow_html=True,
     )
 
+    # ── Foreign currency notice ───────────────
+    if sd.financial_currency and sd.financial_currency != sd.currency:
+        st.markdown(
+            f'<div style="font-size:0.82rem;color:#c8a84b;margin:-10px 0 10px 0;">'
+            f'⚠️ &nbsp;Financials reported in <strong>{sd.financial_currency}</strong>, '
+            f'trading in <strong>{sd.currency}</strong> — '
+            f'owner earnings converted to {sd.currency} at spot rate for DCF and yield calculations.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
     # ── Report date warning ───────────────────
     if sd.last_report_date:
         from datetime import date, datetime
@@ -497,6 +671,7 @@ if (analyse_clicked or auto_run) and ticker_input:
 
     # ── Score breakdown ───────────────────────
     st.subheader("Score Breakdown")
+    score_ctx = build_score_context(sd, r)
     criteria = [
         ("EPS Consistency",    "EPS Consistency (20)",       20),
         ("Return on Equity",   "ROE (15)",                   15),
@@ -513,3 +688,5 @@ if (analyse_clicked or auto_run) and ticker_input:
         c1, c2 = st.columns([3, 7])
         c1.markdown(f"**{label}**  \n`{pts:.0f} / {weight}`")
         c2.progress(pts / weight, text=detail)
+        if label in score_ctx:
+            c2.caption(score_ctx[label])

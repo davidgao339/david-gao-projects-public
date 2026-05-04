@@ -66,6 +66,20 @@ UNIVERSE_URLS = {
     ),
 }
 
+# Hardcoded fallback — verified against NASDAQ 100 index (update periodically)
+_NASDAQ100_FALLBACK = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "TSLA", "AVGO", "COST",
+    "NFLX", "AMD", "ADBE", "QCOM", "INTU", "CSCO", "PEP", "TMUS", "TXN", "AMAT",
+    "HON", "AMGN", "SBUX", "BKNG", "ISRG", "VRTX", "ADP", "GILD", "MDLZ", "ADI",
+    "REGN", "PANW", "LRCX", "MELI", "MU", "KLAC", "CDNS", "SNPS", "CRWD", "FTNT",
+    "MRVL", "ABNB", "CSX", "KDP", "PCAR", "MAR", "ODFL", "WDAY", "DXCM", "CSGP",
+    "DLTR", "BIIB", "FAST", "ROP", "ROST", "EA", "ORLY", "CTSH", "IDXX", "MNST",
+    "GEHC", "AEP", "EXC", "FANG", "PAYX", "CEG", "TTD", "ZS", "TEAM", "CPRT",
+    "KHC", "NXPI", "MCHP", "ON", "DDOG", "EBAY", "VRSK", "ALGN", "ANSS", "XEL",
+    "CHTR", "CTAS", "WBD", "DASH", "RIVN", "ENPH", "GFS", "PDD", "ILMN", "SIRI",
+    "OKTA", "ZM", "ASML", "NTES", "JD", "APP", "PLTR", "ARM", "MSTR", "PTON",
+]
+
 # ──────────────────────────────────────────────
 # DEFAULT UNIVERSE
 # ──────────────────────────────────────────────
@@ -154,6 +168,26 @@ def fetch_universe(universe: str) -> list[str]:
     return tickers
 
 
+def fetch_nasdaq100() -> list[str]:
+    """Fetch NASDAQ 100 constituents from Wikipedia. Falls back to hardcoded list."""
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100", match="Company")
+        df = tables[0]
+        col = next((c for c in df.columns if "ticker" in str(c).lower()
+                    or "symbol" in str(c).lower()), None)
+        if col is None:
+            raise ValueError("Ticker column not found in Wikipedia table")
+        tickers = df[col].dropna().astype(str).str.strip().tolist()
+        tickers = [t for t in tickers if t and len(t) <= 5 and " " not in t and "." not in t]
+        if len(tickers) < 90:
+            raise ValueError(f"Only {len(tickers)} tickers found — table format may have changed")
+        print(f"  Found {len(tickers)} NASDAQ 100 tickers from Wikipedia", flush=True)
+        return tickers
+    except Exception as e:
+        print(f"  Wikipedia fetch failed ({e}) — using hardcoded fallback list", flush=True)
+        return _NASDAQ100_FALLBACK
+
+
 # ──────────────────────────────────────────────
 # DISK CACHE (daily, per ticker)
 # ──────────────────────────────────────────────
@@ -231,10 +265,12 @@ def score_eps_consistency(net_income_history: list,
     return score, f"{positive}/{total} profitable yrs{cagr_str}"
 
 
-def score_return_on_equity(roe_values: list) -> tuple[float, str]:
+def score_return_on_equity(roe_values: list,
+                           debt_to_equity: Optional[float] = None) -> tuple[float, str]:
     """
     Avg ROE >20% over available ~4-year window, no single year below 15%.
     Consistency penalty reduces score proportionally to years below 15%.
+    Leverage penalty applied when D/E > 2 — high ROE from debt is not a moat.
     """
     valid = [r for r in roe_values if r is not None and not np.isnan(r)]
     if not valid:
@@ -256,9 +292,18 @@ def score_return_on_equity(roe_values: list) -> tuple[float, str]:
         base = 0.10
 
     score = base * (1 - consistency_penalty * 0.35)
+
     detail = f"Avg ROE {avg_roe:.1f}%"
     if years_below_15:
         detail += f", {years_below_15}/{len(valid)} yrs <15%"
+
+    if debt_to_equity is not None:
+        de = debt_to_equity / 100 if debt_to_equity > 10 else debt_to_equity
+        if de > 2:
+            leverage_factor = max(0.4, 1 - (de - 2) * 0.12)
+            score *= leverage_factor
+            detail += f", leverage-adj (D/E {de:.1f}x)"
+
     return score, detail
 
 
@@ -465,8 +510,9 @@ def score_capital_allocation(net_income_history: list,
                               eps_history: list) -> tuple[float, str]:
     """
     Proxy for management quality:
-      - Primary: net income CAGR
-      - Bonus: EPS growing faster than NI signals share buybacks
+      - Primary: EPS CAGR (shareholder-relevant; falls back to NI CAGR if unavailable)
+      - Bonus: +0.15 if EPS grows faster than NI (buyback signal)
+      - Penalty: -0.15 if NI grows much faster than EPS (dilution signal)
     Replaces dividend criterion — Buffett values reinvestment over payouts.
     """
     valid_ni = [x for x in net_income_history if x and x > 0] if net_income_history else []
@@ -480,6 +526,8 @@ def score_capital_allocation(net_income_history: list,
 
     parts = [f"NI CAGR {ni_cagr*100:.1f}%"]
     buyback_bonus = 0.0
+    dilution_penalty = 0.0
+    eps_cagr = None
 
     if len(valid_eps) >= 2:
         n_eps = len(valid_eps) - 1
@@ -488,21 +536,27 @@ def score_capital_allocation(net_income_history: list,
         if (eps_cagr - ni_cagr) > 0.02:
             buyback_bonus = 0.15
             parts.append("buybacks detected")
+        elif (ni_cagr - eps_cagr) > 0.05:
+            dilution_penalty = 0.15
+            parts.append("dilution detected")
 
-    if ni_cagr >= 0.12:
+    # EPS CAGR is the shareholder-relevant number; fall back to NI only if unavailable
+    primary_cagr = eps_cagr if eps_cagr is not None else ni_cagr
+
+    if primary_cagr >= 0.12:
         base = 1.0
-    elif ni_cagr >= 0.08:
+    elif primary_cagr >= 0.08:
         base = 0.80
-    elif ni_cagr >= 0.05:
+    elif primary_cagr >= 0.05:
         base = 0.60
-    elif ni_cagr >= 0.02:
+    elif primary_cagr >= 0.02:
         base = 0.40
-    elif ni_cagr >= 0:
+    elif primary_cagr >= 0:
         base = 0.25
     else:
         base = 0.10
 
-    return min(1.0, base + buyback_bonus), " | ".join(parts)
+    return min(1.0, max(0.0, base + buyback_bonus - dilution_penalty)), " | ".join(parts)
 
 
 # ──────────────────────────────────────────────
@@ -515,6 +569,8 @@ class StockData:
     name: str = ""
     sector: str = ""
     industry: str = ""
+    currency: str = "USD"           # trading currency (price / market cap)
+    financial_currency: str = ""    # reporting currency of financial statements
     market_cap: Optional[float] = None
     trailing_pe: Optional[float] = None
     forward_pe: Optional[float] = None
@@ -565,6 +621,20 @@ def _ttm_row(df: pd.DataFrame, candidates: list, n: int = 4) -> Optional[float]:
     return None
 
 
+def _get_fx_rate(from_currency: str, to_currency: str) -> float:
+    """Fetch spot FX rate via yfinance (e.g. CNY → USD). Returns 1.0 on failure."""
+    if not from_currency or from_currency == to_currency:
+        return 1.0
+    try:
+        symbol = f"{from_currency}{to_currency}=X"
+        rate = yf.Ticker(symbol).info.get("regularMarketPrice")
+        if rate and float(rate) > 0:
+            return float(rate)
+    except Exception:
+        pass
+    return 1.0
+
+
 def fetch_stock_data(ticker: str, delay: float = 0.5) -> StockData:
     """Fetch all required fundamental data for a ticker via yfinance."""
     sd = StockData(ticker=ticker)
@@ -576,6 +646,8 @@ def fetch_stock_data(ticker: str, delay: float = 0.5) -> StockData:
         sd.name               = info.get("longName", ticker)
         sd.sector             = info.get("sector", "Unknown")
         sd.industry           = info.get("industry", "Unknown")
+        sd.currency           = info.get("currency", "USD") or "USD"
+        sd.financial_currency = info.get("financialCurrency", "") or ""
         sd.market_cap         = info.get("marketCap")
         sd.trailing_pe        = info.get("trailingPE")
         sd.forward_pe         = info.get("forwardPE")
@@ -769,6 +841,19 @@ def fetch_stock_data(ticker: str, delay: float = 0.5) -> StockData:
         except Exception:
             pass
 
+        # ── FX conversion ────────────────────────────────────────────────────
+        # Financial statements may be in a different currency than the trading price
+        # (e.g. Chinese ADRs: income stmt in CNY, market cap / price in USD).
+        # OE yield and DCF mix these — convert owner_earnings to the trading currency.
+        # Ratios (ROE, ROIC, margins, LTD/NI, IC) are currency-neutral: no conversion needed.
+        if sd.financial_currency and sd.financial_currency != sd.currency:
+            fx = _get_fx_rate(sd.financial_currency, sd.currency)
+            if fx != 1.0:
+                sd.owner_earnings_history = [
+                    x * fx if x is not None else None
+                    for x in sd.owner_earnings_history
+                ]
+
     except Exception as e:
         sd.error = str(e)[:80]
 
@@ -825,7 +910,7 @@ def compute_score(sd: StockData) -> dict:
     interest_exp = sd.interest_expense_history[0] if sd.interest_expense_history else None
 
     s1, d1 = score_eps_consistency(sd.net_income_history, sd.eps_history)
-    s2, d2 = score_return_on_equity(sd.roe_values)
+    s2, d2 = score_return_on_equity(sd.roe_values, sd.debt_to_equity)
     s3, d3 = score_roic(sd.roic_values)
     s4, d4 = score_profit_margins(sd.gross_margin, sd.net_margin)
     s5, d5 = score_debt_liquidity(
@@ -1042,7 +1127,7 @@ def analyze_ticker(ticker: str, cache_dir: Optional[str] = None) -> None:
 # ──────────────────────────────────────────────
 
 def run_screener(tickers: list[str], show_mos: bool = True,
-                 max_market_cap: float = 1_500_000_000,
+                 max_market_cap: Optional[float] = None,
                  min_score: float = 0,
                  workers: int = 5,
                  cache_dir: Optional[str] = None,
@@ -1050,9 +1135,10 @@ def run_screener(tickers: list[str], show_mos: bool = True,
 
     delay = max(0.2, 1.0 / workers)
 
+    cap_str = f"${max_market_cap/1e9:.1f}B" if max_market_cap else "none"
     print(f"\n{'='*70}")
     print("  BUFFETT-STYLE SCREENER  (Owner Earnings Method)")
-    print(f"  Universe: {len(tickers)} tickers | Max mkt cap: ${max_market_cap/1e9:.1f}B")
+    print(f"  Universe: {len(tickers)} tickers | Max mkt cap: {cap_str}")
     print(f"  Workers: {workers} | Cache: {cache_dir or 'disabled'}")
     print(f"{'='*70}\n")
 
@@ -1078,7 +1164,7 @@ def run_screener(tickers: list[str], show_mos: bool = True,
                 print(f"  [{completed}/{total}] {ticker}: ERROR — {sd.error}")
                 continue
 
-            if sd.market_cap and sd.market_cap > max_market_cap * 2:
+            if max_market_cap and sd.market_cap and sd.market_cap > max_market_cap * 2:
                 skipped += 1
                 print(f"  [{completed}/{total}] {ticker}: skipped "
                       f"(${sd.market_cap/1e9:.1f}B cap)")
@@ -1149,6 +1235,18 @@ def run_screener(tickers: list[str], show_mos: bool = True,
     df = pd.DataFrame(rows)
     df.to_csv(output, index=False, encoding="utf-8-sig")
     print(f"\n  Results saved to: {output}  ({len(df)} stocks)")
+
+    if show_mos and {"Price", "MOS Entry"}.issubset(df.columns):
+        summary = (
+            df[["Ticker", "Total Score", "Price", "MOS Entry"]]
+            .rename(columns={"Total Score": "Score", "MOS Entry": "Entry Point"})
+            .dropna(subset=["Price"])
+            .sort_values("Score", ascending=False)
+        )
+        summary_output = output.replace(".csv", "_summary.csv")
+        summary.to_csv(summary_output, index=False, encoding="utf-8-sig")
+        print(f"  Summary saved to:  {summary_output}  (ticker · score · price · entry point)")
+
     print(f"{'='*70}\n")
     return df
 
@@ -1167,17 +1265,18 @@ if __name__ == "__main__":
         help="Single ticker to analyse in detail (no CSV output)."
     )
     universe_group.add_argument(
-        "--universe", choices=list(UNIVERSE_URLS),
-        help="Auto-download ticker universe from iShares ETF holdings. "
-             "Choices: sp600 (~600 stocks), russell2000 (~2000 stocks)."
+        "--universe", choices=[*UNIVERSE_URLS, "nasdaq100"],
+        help="Universe to screen. nasdaq100: NASDAQ 100 (~100 large-caps, Wikipedia). "
+             "sp600: ~600 small-caps (iShares). russell2000: ~2000 small-caps (iShares)."
     )
     universe_group.add_argument(
         "--tickers", nargs="+",
         help="Space-separated list of tickers to screen."
     )
     parser.add_argument(
-        "--max-cap", type=float, default=1_500_000_000,
-        help="Maximum market cap filter in dollars (default: 1.5B)"
+        "--max-cap", type=float, default=None,
+        help="Maximum market cap filter in dollars (default: no filter). "
+             "Example: 1500000000 to restrict to small-caps ≤$1.5B."
     )
     parser.add_argument(
         "--min-score", type=float, default=0,
@@ -1207,7 +1306,9 @@ if __name__ == "__main__":
         analyze_ticker(args.ticker, cache_dir=args.cache_dir or None)
         raise SystemExit(0)
 
-    if args.universe:
+    if args.universe == "nasdaq100":
+        tickers = fetch_nasdaq100()
+    elif args.universe:
         tickers = fetch_universe(args.universe)
     elif args.tickers:
         tickers = args.tickers
