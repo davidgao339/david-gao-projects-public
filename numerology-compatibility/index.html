@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Compatibility by Date of Birth</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="/" class="logo">
+        <span class="logo-icon">♡</span>
+        <span class="logo-text">Compatibility<span class="logo-accent">.app</span></span>
+      </a>
+      <nav class="main-nav">
+        <a href="#">Compatibility by Birth Date</a>
+        <a href="#">Pythagoras Square</a>
+        <a href="#">Zodiac Compatibility</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- HERO / FORM -->
+  <section class="hero">
+    <div class="container">
+      <h1 class="hero-title">Compatibility by Date of Birth</h1>
+      <p class="hero-sub">Free analysis across 7 systems: chakras, zodiac, numerology, tarot &amp; more</p>
+
+      <div class="calc-form-card">
+        <div class="calc-partners">
+
+          <!-- MALE -->
+          <div class="partner partner-male">
+            <div class="partner-icon">♂</div>
+            <div class="partner-label">His date of birth</div>
+            <div class="date-selects">
+              <select id="m-day" class="sel-day">
+                <option value="">Day</option>
+              </select>
+              <select id="m-month" class="sel-month">
+                <option value="">Month</option>
+              </select>
+              <select id="m-year" class="sel-year">
+                <option value="">Year</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="hearts-divider">♡</div>
+
+          <!-- FEMALE -->
+          <div class="partner partner-female">
+            <div class="partner-icon">♀</div>
+            <div class="partner-label">Her date of birth</div>
+            <div class="date-selects">
+              <select id="f-day" class="sel-day">
+                <option value="">Day</option>
+              </select>
+              <select id="f-month" class="sel-month">
+                <option value="">Month</option>
+              </select>
+              <select id="f-year" class="sel-year">
+                <option value="">Year</option>
+              </select>
+            </div>
+          </div>
+
+        </div>
+
+        <button id="calc-btn" class="calc-btn">Calculate Compatibility</button>
+        <div id="calc-error" class="calc-error hidden">Please select complete birth dates for both partners.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PROGRESS BAR -->
+  <div id="progress-bar"></div>
+
+  <!-- RESULTS -->
+  <div id="results" class="results hidden">
+    <div class="container">
+
+      <!-- SECTION 1: CHAKRAS -->
+      <section class="result-section" id="sec-chakra">
+        <div class="section-header">
+          <span class="section-num">1 / 7</span>
+          <h2>Chakra Compatibility</h2>
+          <p class="section-desc">Biorhythmic energy compatibility across 7 chakra levels</p>
+        </div>
+        <div class="chakra-top">
+          <div class="chakra-score">
+            <span id="chakra-compat" class="score-badge score-pink"></span>
+            <span id="chakra-dissonance" class="score-badge score-blue"></span>
+          </div>
+          <div id="chakra-balance" class="chakra-balance"></div>
+        </div>
+        <div id="chakra-bars" class="chakra-bars"></div>
+      </section>
+
+      <!-- SECTION 2: ZODIAC -->
+      <section class="result-section" id="sec-zodiac">
+        <div class="section-header">
+          <span class="section-num">2 / 7</span>
+          <h2>Zodiac Compatibility</h2>
+        </div>
+        <div class="zodiac-signs">
+          <div class="zodiac-person">
+            <div class="zodiac-gender male">♂</div>
+            <div id="zodiac-sign-male" class="zodiac-sign-name"></div>
+            <div id="zodiac-element-male" class="zodiac-element"></div>
+            <div id="zodiac-period-male" class="zodiac-period"></div>
+          </div>
+          <div class="zodiac-vs">VS</div>
+          <div class="zodiac-person">
+            <div class="zodiac-gender female">♀</div>
+            <div id="zodiac-sign-female" class="zodiac-sign-name"></div>
+            <div id="zodiac-element-female" class="zodiac-element"></div>
+            <div id="zodiac-period-female" class="zodiac-period"></div>
+          </div>
+        </div>
+        <div id="zodiac-harmony" class="zodiac-harmony"></div>
+        <div class="zodiac-role-card">
+          <div id="zodiac-role-title" class="zodiac-role-title"></div>
+          <div id="zodiac-role-diff" class="zodiac-role-diff"></div>
+          <div id="zodiac-role-desc" class="zodiac-role-desc"></div>
+          <div id="zodiac-pair-text" class="zodiac-pair-text"></div>
+        </div>
+      </section>
+
+      <!-- SECTION 3: MODERN NUMEROLOGY -->
+      <section class="result-section" id="sec-numerology">
+        <div class="section-header">
+          <span class="section-num">3 / 7</span>
+          <h2>Modern Numerology</h2>
+          <p class="section-desc">Shared Consciousness · Mission · Action · Result</p>
+        </div>
+        <div class="numera-grid">
+          <div class="numera-col">
+            <div class="numera-col-title male-color">♂ His Numbers</div>
+            <div id="num-male-cons" class="numera-block"></div>
+          </div>
+          <div class="numera-col">
+            <div class="numera-col-title female-color">♀ Her Numbers</div>
+            <div id="num-female-cons" class="numera-block"></div>
+          </div>
+        </div>
+        <div class="pair-section">
+          <div class="pair-title">Pair Numerology</div>
+          <div id="num-pair" class="pair-grid"></div>
+        </div>
+      </section>
+
+      <!-- SECTION 4: PYTHAGOREAN SQUARE -->
+      <section class="result-section" id="sec-pifagor">
+        <div class="section-header">
+          <span class="section-num">4 / 7</span>
+          <h2>Pythagorean Square</h2>
+          <p class="section-desc">Classical numerology character matrix</p>
+        </div>
+        <div class="pifagor-wrap">
+          <div class="pifagor-person">
+            <div class="pifagor-label male-color">♂ His Square</div>
+            <div id="pifagor-male" class="pifagor-grid"></div>
+          </div>
+          <div class="pifagor-person">
+            <div class="pifagor-label female-color">♀ Her Square</div>
+            <div id="pifagor-female" class="pifagor-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 5: LOVE SCENARIOS -->
+      <section class="result-section" id="sec-scenario">
+        <div class="section-header">
+          <span class="section-num">5 / 7</span>
+          <h2>Love Scenarios</h2>
+          <p class="section-desc">Vedic numerology love archetype by birth month</p>
+        </div>
+        <div class="scenario-grid">
+          <div class="scenario-card">
+            <div class="scenario-label male-color">♂ His scenario</div>
+            <div id="scenario-male-month" class="scenario-month"></div>
+            <div id="scenario-male-text" class="scenario-text"></div>
+          </div>
+          <div class="scenario-card">
+            <div class="scenario-label female-color">♀ Her scenario</div>
+            <div id="scenario-female-month" class="scenario-month"></div>
+            <div id="scenario-female-text" class="scenario-text"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 6: TAROT ARCANA -->
+      <section class="result-section" id="sec-tarot">
+        <div class="section-header">
+          <span class="section-num">6 / 7</span>
+          <h2>Tarot Arcana</h2>
+          <p class="section-desc">Archetypal personality by day of birth</p>
+        </div>
+        <div class="tarot-grid">
+          <div class="tarot-card">
+            <div class="tarot-gender male-color">♂</div>
+            <div id="tarot-male-roman" class="tarot-roman"></div>
+            <div id="tarot-male-name" class="tarot-name"></div>
+            <div id="tarot-male-desc" class="tarot-desc"></div>
+          </div>
+          <div class="tarot-card">
+            <div class="tarot-gender female-color">♀</div>
+            <div id="tarot-female-roman" class="tarot-roman"></div>
+            <div id="tarot-female-name" class="tarot-name"></div>
+            <div id="tarot-female-desc" class="tarot-desc"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION 7: FATE & WILL CHARTS -->
+      <section class="result-section" id="sec-faw">
+        <div class="section-header">
+          <span class="section-num">7 / 7</span>
+          <h2>Destiny &amp; Will Graphs</h2>
+          <p class="section-desc">12-year life cycle energy waves</p>
+        </div>
+        <div class="faw-charts">
+          <div class="faw-chart-wrap">
+            <div class="faw-chart-title male-color">♂ His cycles</div>
+            <canvas id="chart-male" height="120"></canvas>
+          </div>
+          <div class="faw-chart-wrap">
+            <div class="faw-chart-title female-color">♀ Her cycles</div>
+            <canvas id="chart-female" height="120"></canvas>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <footer class="site-footer">
+    <div class="container">
+      <p>Free compatibility calculator · No registration required</p>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

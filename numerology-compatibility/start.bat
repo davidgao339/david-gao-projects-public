@@ -1,0 +1,9 @@
+@echo off
+echo Starting proxy server on port 8766...
+start "Proxy" cmd /k "node proxy.js"
+timeout /t 1 /nobreak >nul
+echo Starting web server on port 8765...
+start "Web" cmd /k "python -m http.server 8765"
+timeout /t 1 /nobreak >nul
+echo Opening browser...
+start http://localhost:8765
