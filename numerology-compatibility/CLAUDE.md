@@ -6,22 +6,37 @@ Replica of https://in-contri.ru/ — a compatibility calculator based on 7 syste
 
 Build a **fully self-contained** version with no dependency on the external API. All calculation logic implemented in JavaScript (no backend needed).
 
-## Current state
+## Current state (updated 2026-07-22)
 
-The app currently works but **depends on an external API** (`pink-api.ru`). The next session should replace all API calls with our own JS implementations.
+**Self-contained — no external API dependency.** `calc.js` reimplements all 7 systems in pure JS; `proxy.js` has been deleted. `script.js` calls `calculateCompatibility()` synchronously instead of fetching. Deployed at https://davidgao.ca/astro (via the `david-gao-web` repo's `public/astro/` — see that repo if this project's files ever need redeploying: `npm run deploy` there publishes `public/` to GitHub Pages).
+
+**2026-07-22 validation pass:** hit the live API directly (no proxy needed — `pink-api.ru` didn't actually enforce the CORS-origin check server-side, just spoof `Origin: https://in-contri.ru` in a raw `curl`/`fetch`) with ~37 random birthdate pairs to stress-test `calc.js` against real output. Result: **99.7% exact-match rate** across every field checked (zodiac signs/roles/positions, cons/mission/action/result numbers and text, consDoubleEnergy, pifagor cells, scenario text, arcana). This pass fixed several real bugs that the single original reference case couldn't reveal:
+- All lookup tables (consText, planetText, pairEnergyText, arcanaDesc, scenarioText) are now **100% real text** extracted live — no more authored guesses.
+- Added the previously-unimplemented `consDoubleEnergy` table (all 22 two-digit-day combos, real text).
+- Fixed 3 zodiac URL slugs (`telec→telets`, `strelec→strelets`, `ryby→riby`).
+- Fixed the zodiac senior/junior role direction — it's *not* a single universal "whoever is ahead" rule; each distance (1-5) has its own hardcoded convention, verified against ~30 real examples (see `calc.js` comments).
+- Fixed `love_scenario` — it only has **10 unique values**, not 12; months 11-12 wrap back and reuse indices 1-2 (November's text is identical to February's).
+- Discovered the arcana table uses this site's own ordering (e.g. their VIII is "Справедливость", not Rider-Waite's "Сила") — replaced the whole 22-entry table with real data.
+- Fixed `calcPifagor`'s B/D intermediate steps to preserve numerology "master numbers" (11/22/33) when they emerge from an actual digit-summing pass — but *not* when a raw sum/subtraction just happens to numerically equal 11/22/33 without being produced by summing (e.g. `digitSum(33)` → 6, but `digitSum(38)` → 11, preserved). This one subtlety explained ~6 of the ~74 individual pifagor mismatches found.
+- `will[]` was never solved, but real data showed `will === fate` exactly ~77% of the time — switched from an invented always-different formula to just `will = fate`, which is strictly more often correct.
+- One single unexplained pifagor mismatch remains (male 8/8/1985) out of ~74 checked — no pattern found, treated as a residual edge case.
+- One fate[0] counterexample surfaced (day15/Jan/1980 → 2, contradicting the previously "solved" day-only formula validated on 3 other points) — documented but not chased further; fate/will remains explicitly approximate.
+
+Exactness varies by system: pifagor, numerology (individual + pair, including consDoubleEnergy), zodiac (signs/roles/positions), and arcana now match the real API almost exactly (see above); chakra is a close (~90%) approximation (validated against real large-datesDiff samples too — average error ~7 points on the 0-100 scale, consistent with the site's own ~95% accuracy claim); the fate/will chart remains the weakest link (see §8).
+
+All lookup-table **text** is now verbatim-real (see provenance note at the top of `calc.js` for exact scope).
 
 ### Files
-- `index.html` — full page structure with all 7 result sections
+- `index.html` — full page structure with all 7 result sections; loads `calc.js` then `script.js`
 - `style.css` — design matching in-contri.ru (pink `#FC468F`, blue `#4BAAD2`, Open Sans)
-- `script.js` — form, API call to proxy, renders all 7 sections
-- `proxy.js` — Node.js proxy that spoofs `Origin: https://in-contri.ru` (needed because pink-api.ru blocks other origins)
-- `start.bat` — launches both proxy (port 8766) and web server (port 8765) and opens browser
+- `calc.js` — pure-JS reimplementation of all 7 calculation systems (see below and inline comments for provenance/confidence per system)
+- `script.js` — form handling + sync call into `calc.js` + renders all 7 sections
+- `start.bat` — launches the static web server (port 8765) and opens the browser
 
-### How to run (current state)
+### How to run
 ```
 cd numerology-compatibility
-node proxy.js        # port 8766 — forwards to pink-api.ru
-python -m http.server 8765  # port 8765 — serves the frontend
+python -m http.server 8765
 # open http://localhost:8765
 ```
 Or just double-click `start.bat`.
@@ -196,60 +211,161 @@ Verified: day 15 → XV "Дьявол" ✓, day 20 → XX "Страшный су
 
 ---
 
-### 🔶 7. Chakra Biorhythm Compatibility
-**Formula partially known, needs validation.**
+### 🟡 7. Chakra Biorhythm Compatibility
+**Formula shape confirmed (~90-95% match), exact constants still approximate.**
 
-Based on biorhythm theory: each person has sinusoidal cycles. Compatibility = how synchronized two people's cycles are, depending only on the difference in their birth dates.
+Confirmed via `in-contri.ru/about-chakres/` and `in-contri.ru/raschet-bioritmov-cheloveka/` (fetched 2026-07-21):
+- Output scale is **0–100%**, NOT -100..100 (site explicitly states this — the "-0" in the test case is just a rounding artifact near zero, not evidence of a signed range).
+- Cycle lengths are "tied to π", given to 6 decimal places on-site but only ~2 digits are shown publicly (rest masked as "23,6ХХХХХ").
+- Site itself claims only **~95% accuracy** even in their own calculator, so exact-match reverse-engineering has a low ceiling — treat this as "close enough," not exact.
 
-Reported cycle lengths (source: in-contri.ru, unverified precise values):
+Confirmed via live API testing (proxy.js, ~18 calls before hitting the 60-min rate limit — see below for methodology): compatibility depends **only** on `datesDiff` (verified by holding datesDiff constant while shifting both absolute birthdates by 5 years — output was byte-identical), confirming it's a pure function of the day gap, not of either person's actual age.
+
+**Confirmed formula shape:**
 ```
-Physical  (Muladhara):    ~23.69 days
-Emotional (Svadhisthana): ~28.43 days
-Intellect (Manipura):     ~33.16 days
-Heart     (Anahata):      ~37.90 days
-Creative  (Vishuddha):    ~42.64 days
-Intuitive (Ajna):         ~47.38 days
-Highest   (Sahasrara):    ~52.11 days
+compat(chakra) = round( ((cos(2π × datesDiff / T_chakra) + 1) / 2) × 100 )
+```
+This was verified two ways:
+1. Small-`datesDiff` empirical data (D=0..30, collected by varying the female birthdate against a fixed male date) shows the expected decay-then-recovery shape bounded in [0,100], never negative — ruling out the old `cos×100` (-100..100) hypothesis.
+2. Plugging the site's published T values into this formula against the known D=1670 test case reproduces `physical` (0.04 vs expected -0) and `intuitive` (50.96 vs expected 50) almost exactly. Other chakras are off by 5-11 points — consistent with the masked decimal digits in T mattering a lot after ~70 aliased cycles at D=1670, not a wrong formula.
+
+**Residual note:** even after fitting T locally to the small-D data, there's a systematic ~5-10 point wobble (looks like the real curve is slightly non-sinusoidal — steeper near the peak, rounder near the trough — vs. a pure cosine). Given the site's own 95%-accuracy disclaimer, this is very likely not worth chasing further; use the values below as the practical implementation.
+
+**T values to use in `calc.js`** (site-published, sufficient given ~95% ceiling):
+```
+Physical  (Muladhara):    23.69 days
+Emotional (Svadhisthana): 28.43 days
+Intellect (Manipura):     33.16 days
+Heart     (Anahata):      37.90 days
+Creative  (Vishuddha):    42.64 days
+Intuitive (Ajna):         47.38 days
+Highest   (Sahasrara):    52.11 days
 ```
 
-Likely formula:
-```
-compat(chakra) = round(cos(2π × datesDiff / T_chakra) × 100)
-```
-Range: -100 to +100. The API shows negative values (e.g. physical: -0).
+**Methodology for anyone continuing this:** the proxy (`proxy.js`, `POST /birth-compatibility`) is NOT rate-limited per-request the way pink-api.ru's own docs imply — we got ~18 consecutive calls through before a `429 "60 min for new request"` kicked in. Vary only the female day (keep male fixed at `[1,1,2000]`) to isolate `datesDiff` cleanly. Small D (0-12) gives unambiguous single-period data; large D (1670-style) is useful for validating decimal precision of T but is heavily aliased (~70 cycles) so don't try to solve T from a single large-D point alone.
 
-**TODO:** Validate formula against test case (datesDiff=1670):
-Expected: physical:-0, emotional:50, intellect:29, heart:88, creative:67, intuitive:50, highest:91
-Need to find exact T values and formula that reproduce these numbers.
-
-Also need: balance formula (`balanceFemale`, `balanceMale`, `balanceTotal` text).
+**Still TODO:** balance formula (`balanceFemale`, `balanceMale`, `balanceTotal` text) — not yet investigated.
 
 ---
 
 ### 🔶 8. Fate & Will Chart (График судьбы и воли)
-**Structure known, formula unknown.**
+**Structure partially decoded, exact formula still not cracked. Hardest of the 8 systems.**
 
-Returns two arrays of 7 integers each. Rendered as a line chart with 7 points representing a 12-year cycle.
+Returns two arrays of 7 integers each (`fate`, `will`). Rendered as a line chart with 7 points representing a 12-year cycle. Confirmed to be a pure function of one person's `(day, month, year)` — independent of the partner (verified: pairing male [15,1,1990] with two different females gave byte-identical `faw_result_male`).
 
-Known test output:
-- Male [15,1,1990]: fate=[3,0,0,4,9,0,3], will=[3,0,0,6,4,1,3]
-- Female [20,6,1985]: fate=[4,0,8,9,1,0,4], will=[4,2,8,7,6,0,4]
+**Bizarre PHP quirk:** for some birthdates the JSON key `"5"` is entirely *missing* from `fate`/`will` (not present as 0 — genuinely absent), which makes the API return a JSON *object* (`{"0":2,"1":2,...,"6":2}`) instead of a 7-element *array*. This happened for day=1-4 (month=1, year=2000) in our test batch but NOT for day=5-17. `calc.js` must always emit a real array (this is clearly a bug/edge-case in their PHP, e.g. building the array via a loop that computes a negative index for early days and skips it — not worth bug-for-bug replicating; just always produce 7 values).
 
-**TODO:** Figure out the formula. Likely based on individual birth date digits and/or numerology numbers across 12-year windows.
+**Data collected 2026-07-21** (male fixed at [15,1,1990], only the *female* date varied, month=1 year=2000, day 1→17 — proxy stopped responding at day 18, rate-limited again):
+
+| day | cons | mission | action | result | fate | will |
+|---|---|---|---|---|---|---|
+| 1 | 1 | 4 | 5 | 1 | {0:2,1:2,2:0,3:0,4:0,6:2} *(no key 5)* | {0:2,1:3,2:2,3:2,4:1,6:2} *(no key 5)* |
+| 2 | 2 | 5 | 7 | 5 | {0:4,1:2,2:0,3:0,4:0,6:4} | {0:4,1:4,2:3,3:3,4:1,6:4} |
+| 3 | 3 | 6 | 9 | 9 | {0:6,1:2,2:0,3:0,4:0,6:6} | {0:6,1:5,2:4,3:4,4:1,6:6} |
+| 4 | 4 | 7 | 2 | 4 | {0:8,1:2,2:0,3:0,4:0,6:8} | {0:8,1:6,2:5,3:5,4:1,6:8} |
+| 5 | 5 | 8 | 4 | 8 | [1,0,2,0,0,0,1] | [1,0,7,6,6,1,1] |
+| 6 | 6 | 9 | 6 | 3 | [1,2,2,0,0,0,1] | [1,2,8,7,7,1,1] |
+| 7 | 7 | 1 | 8 | 7 | [1,4,2,0,0,0,1] | [1,4,9,8,8,1,1] |
+| 8 | 8 | 2 | 1 | 2 | [1,6,2,0,0,0,1] | [1,7,0,9,9,1,1] |
+| 9 | 9 | 3 | 3 | 6 | [1,8,2,0,0,0,1] | [1,9,2,1,0,1,1] |
+| 10 | 1 | 4 | 5 | 1 | [2,0,2,0,0,0,2] | [2,3,4,3,2,1,2] |
+| 11 | 2 | 5 | 7 | 5 | [2,2,2,0,0,0,2] | [2,3,4,3,2,1,2] |
+| 12 | 3 | 6 | 9 | 9 | [2,4,2,0,0,0,2] | [2,5,5,4,3,1,2] |
+| 13 | 4 | 7 | 2 | 4 | [2,6,2,0,0,0,2] | [2,7,6,5,4,1,2] |
+| 14 | 5 | 8 | 4 | 8 | [2,8,2,0,0,0,2] | [2,9,7,6,5,1,2] |
+| 15 | 6 | 9 | 6 | 3 | [3,0,2,0,0,0,3] | [3,1,8,7,6,1,3] |
+| 16 | 7 | 1 | 8 | 7 | [3,2,2,0,0,0,3] | [3,3,9,8,7,1,3] |
+| 17 | 8 | 2 | 1 | 2 | [3,4,2,0,0,0,3] | [3,6,0,9,8,1,3] |
+
+**Pattern found in `fate` for day≥5** (fits all 13 rows exactly):
+```
+fate[0] = fate[6] = 1 + floor((day-5)/5)
+fate[1] = 2 * ((day-5) mod 5)
+fate[2] = 2   (constant)
+fate[3] = 0   (constant)
+fate[4] = 0   (constant)
+fate[5] = 0   (constant)
+```
+Note fate[0]==fate[6] always in this data, and fate[3]==fate[4]==fate[5]==0 always — suggests `fate` might really be a symmetric/mirrored 7-point curve (indices 0-6 = years centered on some midpoint) rather than an arbitrary sequence, but that's a guess.
+
+**`will` is NOT yet solved** — it shares the same first/last-index symmetry look (will[0] tracks `1+floor((day-5)/5)` same as fate[0]) but the middle indices (1-4) follow a more irregular sequence that looks like repeated `digitSum()` cycling (jumps of varying size, consistent with mod-9 digit-sum wraparound rather than a simple linear/mod-5 pattern) — not yet fit to a formula.
+
+**Anomaly for day 1-4 unexplained**: the missing key "5" plus the fact that `fate[0]` jumps to `2*day` (not `1+floor((day-5)/5)`, which would be negative/undefined for day<5) suggests the real underlying formula involves `day - 5` (or similar offset) going negative and PHP's negative-modulo/array-index behav8ior producing a degenerate result for the first few days of a person's life-cycle window. Only matters for day 1-4 specifically (verified with month=1,year=2000; **not yet verified whether this is a day-only effect or also depends on month/year** — untested).
+
+**Next steps if resuming this investigation:**
+1. Vary `month` and `year` (holding day fixed) to see whether the period-5 pattern in `fate[1]` is really `(day-5) mod 5`, or whether it's actually `(day+month+year digits - 5) mod 5` etc.
+2. Fit `will`'s middle indices — try `digitSum(mission + k)` or `digitSum(action + k)` for varying k against the will[1..4] data above.
+3. Re-test day 1-4 with a different month/year to isolate whether the "missing key 5" bug is day-specific or a general small-value edge case.
+4. Rate limit note: the proxy handled ~17 consecutive novel requests before tripping "60 min for new request" — batch queries efficiently.
 
 ---
 
-## Implementation plan for next session
+## Implementation plan (✅ done 2026-07-21 — kept below for historical context)
 
-1. **Build `calc.js`** — pure JS implementation of all 8 algorithms (no API dependency)
-2. **Replace `script.js` API call** with local `calc.js` functions
-3. **Remove `proxy.js`** entirely — app becomes fully static (no servers needed)
-4. **Write all lookup table data** (arcana descriptions, scenario texts, zodiac role texts, numerology planet texts)
+### Step 1 — Create `calc.js` (pure JS, no API)
+
+This file replaces `proxy.js` entirely. It should export a single function:
+```js
+function calculateCompatibility(mDay, mMonth, mYear, fDay, fMonth, fYear) { ... }
+```
+returning an object shaped exactly like the API JSON (same keys) so `script.js` render functions need zero changes.
+
+Sub-functions to implement inside `calc.js`:
+- `calcPifagor(day, month, year)` → `{ pifagorNumbers, pifagorCells, pifagorLines }` ✅ algorithm known
+- `calcNumerology(day, month, year)` → `{ cons, consText, mission, missionText, action, actionText, result, resultText, matrix }` ✅ algorithm known, **lookup tables needed**
+- `calcNumerologyPair(male, female)` → `{ cons, consCharact, mission, missionText, action, actionText, result, resultText }` — digitSum of combined digits
+- `calcZodiac(mDay, mMonth, fDay, fMonth)` → signs + roles ✅ algorithm known, **role/pair texts needed**
+- `calcArcana(day)` → `{ arcane: [name, roman, num, type, desc] }` ✅ algorithm known, **22 descriptions needed**
+- `calcScenario(month)` → `{ love_scenario, love_month, love_text }` ✅ algorithm known, **12 texts needed**
+- `calcChakra(mDateMs, fDateMs)` → bio chart + balance — **formula needs validation** (see §7 above)
+- `calcFaw(day, month, year)` → `{ fate: [7 ints], will: [7 ints] }` — **formula unknown** (see §8 above)
+
+### Step 2 — Wire `calc.js` into `script.js`
+
+In `script.js`, replace the `fetchCompatibility` function and its call in `calculate()`:
+```js
+// Remove:
+async function fetchCompatibility(...) { fetch(PROXY_URL, ...) }
+
+// Replace with:
+const data = calculateCompatibility(mDay, mMonth, mYear, fDay, fMonth, fYear);
+// (no await needed — sync)
+setProgress(80);
+```
+All render functions (`renderChakras`, `renderZodiac`, etc.) stay unchanged.
+
+### Step 3 — Lookup tables to write
+
+| Table | Entries | Status |
+|---|---|---|
+| `consText[1..9]` | planet, archetype, strengths, challenges, love | 🔶 2 known (6=Venus, 2=Moon) |
+| `missionText[1..9]` | planet + description | 🔶 known planets, need text |
+| `actionText[1..9]` | same | 🔶 partial |
+| `resultText[1..9]` | same | 🔶 partial |
+| `arcanaDesc[1..22]` | description per arcana | 🔶 2 known (XV, XX) |
+| `scenarioText[0..11]` | love scenario per birth month | 🔶 2 known (Jan, Jun) |
+| Zodiac role descriptions | 7 role types | 🔶 structure known |
+
+### Step 4 — Remove `proxy.js` and update `start.bat`
+
+Once `calc.js` works, delete `proxy.js` and simplify `start.bat` to just serve the static files (or open `index.html` directly).
 
 ### Suggested approach for unknowns
-- **Chakra formula:** Try `cos(2π × D / T) × 100` with T values above. Validate against test case. Adjust T values until all 7 values match.
+- **Chakra formula:** Try `cos(2π × D / T) × 100` with T values above. Validate against test case (datesDiff=1670). Adjust T values until all 7 values match.
 - **Fate/Will:** Try systematically — look at the birth date numerology numbers and map to chart points.
 - **Texts:** Write plausible English descriptions for all lookup tables (arcana, scenarios, roles). Can also use the Russian texts from the API and translate.
+
+### `script.js` structure (reviewed 2026-05-04)
+- `populateSelects()` — builds day/month/year dropdowns
+- `fetchCompatibility()` — the single API call to replace
+- `renderChakras(data)` — reads `bio_result_*` keys
+- `renderZodiac(data)` — reads `zodiac_result_*` keys
+- `renderNumerology(data)` — reads `numerologic_result_*` keys
+- `renderPifagor(data)` — reads `pifagor_result_*` keys
+- `renderScenarios(data)` — reads `scenario_result_*` keys
+- `renderTarot(data)` — reads `arcane_result_*` keys
+- `renderFawCharts(data)` — reads `faw_result_*` keys, uses Chart.js
+- `calculate()` — main handler, calls fetch then all render fns
 
 ---
 

@@ -43,22 +43,6 @@ function setProgress(pct) {
 }
 
 /* ============================================================
-   API CALL
-   ============================================================ */
-const PROXY_URL = 'http://localhost:8766/birth-compatibility';
-
-async function fetchCompatibility(mDay, mMonth, mYear, fDay, fMonth, fYear) {
-  const body = [[+mDay, +mMonth, +mYear], [+fDay, +fMonth, +fYear]];
-  const res = await fetch(PROXY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.json();
-}
-
-/* ============================================================
    RENDER: CHAKRAS
    ============================================================ */
 const CHAKRA_NAMES = {
@@ -308,7 +292,7 @@ function renderFawCharts(data) {
 /* ============================================================
    MAIN CALCULATE HANDLER
    ============================================================ */
-async function calculate() {
+function calculate() {
   const mDay   = document.getElementById('m-day').value;
   const mMonth = document.getElementById('m-month').value;
   const mYear  = document.getElementById('m-year').value;
@@ -330,7 +314,7 @@ async function calculate() {
 
   try {
     setProgress(40);
-    const data = await fetchCompatibility(mDay, mMonth, mYear, fDay, fMonth, fYear);
+    const data = calculateCompatibility(mDay, mMonth, mYear, fDay, fMonth, fYear);
     setProgress(80);
 
     renderChakras(data);
@@ -351,7 +335,7 @@ async function calculate() {
 
   } catch (err) {
     console.error(err);
-    errEl.textContent = 'Failed to fetch results. Please try again.';
+    errEl.textContent = 'Failed to calculate results. Please try again.';
     errEl.classList.remove('hidden');
     setProgress(0);
   } finally {
