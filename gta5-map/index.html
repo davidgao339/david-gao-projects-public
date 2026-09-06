@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>GTA V Map Collectibles</title>
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
@@ -12,9 +12,13 @@
 </head>
 <body>
     <div id="app">
+        <!-- Mobile Toggle Button -->
+        <button id="mobile-sidebar-toggle"><i class="fas fa-list"></i> Menu & Sync</button>
+
         <div id="sidebar">
             <div class="sidebar-header">
                 <h2>GTA V Collectibles</h2>
+                <button id="mobile-sidebar-close"><i class="fas fa-times"></i></button>
             </div>
             
             <div id="cloud-sync-panel">

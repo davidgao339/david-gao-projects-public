@@ -109,6 +109,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         return ICON_MAP[title] || 'fa-map-marker-alt';
     }
 
+    // === Mobile Sidebar Toggle ===
+    const sidebar = document.getElementById('sidebar');
+    const mobileToggle = document.getElementById('mobile-sidebar-toggle');
+    const mobileClose = document.getElementById('mobile-sidebar-close');
+
+    if (mobileToggle && sidebar) {
+        mobileToggle.addEventListener('click', () => {
+            sidebar.classList.add('open');
+        });
+    }
+
+    if (mobileClose && sidebar) {
+        mobileClose.addEventListener('click', () => {
+            sidebar.classList.remove('open');
+        });
+    }
+
     // === Marker Management & Cloud Sync ===
     const CLOUD_API = "https://jsonblob.com/api/jsonBlob";
     let syncId = localStorage.getItem("gta5_sync_id") || "";
