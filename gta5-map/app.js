@@ -16,7 +16,121 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const imageBounds = [[0, 0], [8192, 8192]];
     let currentMapLayer = L.imageOverlay(MAP_STYLES.atlas, imageBounds).addTo(map);
-    map.setView([4096, 4096], -2); // Initial center
+    map.setView([4096, 4096], -2);
+
+    // === Guided Auto-Calibration UI (MERCATOR FIXED) ===
+    const MG_BEEKERS = { lat: 83.348067483208, lng: -124.013671875 };
+    const MG_OSHEAS = { lat: 79.08014, lng: -106.094971 };
+
+    let pixelBeekers = null;
+    let pixelOsheas = null;
+    let tempMarker = null;
+    let step = 0; 
+
+    const calibDiv = document.createElement('div');
+    calibDiv.style.position = 'absolute';
+    calibDiv.style.top = '10px';
+    calibDiv.style.left = '50%';
+    calibDiv.style.transform = 'translateX(-50%)';
+    calibDiv.style.zIndex = '9999';
+    calibDiv.style.background = '#e67e22';
+    calibDiv.style.padding = '15px 30px';
+    calibDiv.style.borderRadius = '8px';
+    calibDiv.style.color = 'white';
+    calibDiv.style.boxShadow = '0 4px 12px rgba(0,0,0,0.5)';
+    calibDiv.style.textAlign = 'center';
+    calibDiv.innerHTML = `
+        <h4 style="margin: 0 0 10px 0;">Curve-Correction Calibration</h4>
+        <p style="font-size: 12px; margin: 0 0 10px 0;">Applying Spherical Mercator Un-warp Formula...</p>
+        <p id="calib-text" style="font-size: 16px; margin: 0 0 10px 0; font-weight: bold;">Click exactly where <strong>Beeker's Garage</strong> is located.</p>
+        <div id="calib-controls" style="display: none;">
+            <button id="btn-confirm" style="padding: 10px 20px; font-weight: bold; cursor: pointer; color: black; background: #2ecc71; border: none; border-radius: 4px; margin-right: 10px;">Confirm Point</button>
+            <button id="btn-reclick" style="padding: 10px 20px; font-weight: bold; cursor: pointer; color: black; background: #f1c40f; border: none; border-radius: 4px;">Click Again</button>
+        </div>
+        <input type="text" id="calib-result" style="display:none; width: 100%; margin-top:10px; padding: 5px; color: black;" readonly>
+    `;
+    document.getElementById('map-container').appendChild(calibDiv);
+
+    const btnConfirm = document.getElementById('btn-confirm');
+    const btnReclick = document.getElementById('btn-reclick');
+    const calibText = document.getElementById('calib-text');
+    const calibControls = document.getElementById('calib-controls');
+
+    map.on('click', (e) => {
+        if (step === 0 || step === 2) {
+            if (tempMarker) map.removeLayer(tempMarker);
+            tempMarker = L.marker([e.latlng.lat, e.latlng.lng]).addTo(map);
+            
+            if (step === 0) {
+                pixelBeekers = [e.latlng.lat, e.latlng.lng];
+                calibText.innerHTML = "Is this exactly <strong>Beeker's Garage</strong>?";
+                step = 1;
+            } else if (step === 2) {
+                pixelOsheas = [e.latlng.lat, e.latlng.lng];
+                calibText.innerHTML = "Is this exactly <strong>O'Sheas Barbers Shop</strong>?";
+                step = 3;
+            }
+            calibControls.style.display = 'block';
+        }
+    });
+
+    btnReclick.onclick = () => {
+        if (tempMarker) map.removeLayer(tempMarker);
+        tempMarker = null;
+        calibControls.style.display = 'none';
+        
+        if (step === 1) {
+            step = 0;
+            calibText.innerHTML = "Click exactly where <strong>Beeker's Garage</strong> is located.";
+        } else if (step === 3) {
+            step = 2;
+            calibText.innerHTML = "Click exactly where <strong>O'Sheas Barbers Shop</strong> is located.";
+        }
+    };
+
+    btnConfirm.onclick = () => {
+        if (step === 1) {
+            step = 2;
+            calibControls.style.display = 'none';
+            calibText.innerHTML = "Awesome! Now click exactly where <strong>O'Sheas Barbers Shop</strong> is located.";
+            
+            const icon = L.divIcon({ html: `<div style="background: #2ecc71; width: 14px; height: 14px; border-radius: 50%; border: 2px solid white;"></div>`, className: 'custom-marker', iconSize: [18,18] });
+            tempMarker.setIcon(icon);
+            tempMarker.bindPopup("Beeker's Garage (Locked)").openPopup();
+            tempMarker = null;
+
+        } else if (step === 3) {
+            step = 4;
+            calibControls.style.display = 'none';
+            calibText.innerHTML = "Perfect! Calculating Mercator map alignment...";
+            calibDiv.style.background = '#2ecc71';
+            
+            const icon = L.divIcon({ html: `<div style="background: #2ecc71; width: 14px; height: 14px; border-radius: 50%; border: 2px solid white;"></div>`, className: 'custom-marker', iconSize: [18,18] });
+            tempMarker.setIcon(icon);
+            tempMarker.bindPopup("O'Sheas (Locked)").openPopup();
+
+            // === THE CRITICAL MERCATOR FIX ===
+            // 1. Convert the MapGenie Lat/Lng to Flat Meters to "un-warp" them!
+            const ptB = L.Projection.SphericalMercator.project(L.latLng(MG_BEEKERS.lat, MG_BEEKERS.lng));
+            const ptO = L.Projection.SphericalMercator.project(L.latLng(MG_OSHEAS.lat, MG_OSHEAS.lng));
+
+            // 2. Scale the Flat Meters to your Image Pixel clicks
+            const scaleY = (pixelOsheas[0] - pixelBeekers[0]) / (ptO.y - ptB.y);
+            const scaleX = (pixelOsheas[1] - pixelBeekers[1]) / (ptO.x - ptB.x);
+            const offsetY = pixelBeekers[0] - (ptB.y * scaleY);
+            const offsetX = pixelBeekers[1] - (ptB.x * scaleX);
+
+            window.currentCalibration = { scaleY, scaleX, offsetY, offsetX };
+            
+            setTimeout(() => {
+                renderMarkers(true);
+                calibText.innerHTML = "Mercator Alignment Locked! Copy the text below:";
+                document.getElementById('calib-result').style.display = 'block';
+                document.getElementById('calib-result').value = JSON.stringify(window.currentCalibration);
+            }, 500);
+        }
+    };
+
 
     // Style switcher
     const styleSelect = document.getElementById('map-style-select');
@@ -30,16 +144,87 @@ document.addEventListener('DOMContentLoaded', async () => {
         currentMapLayer = L.imageOverlay(MAP_STYLES[style], imageBounds).addTo(map);
     });
 
-    // === Locked Calibration ===
-    const CALIBRATION = {"scaleY":453.2059196437228,"scaleX":68.02948542440022,"offsetY":-30722.33757425435,"offsetX":12233.086283246665};
+    // === Marker Management & Cloud Sync ===
+    const CLOUD_API = "https://jsonblob.com/api/jsonBlob";
+    let syncId = localStorage.getItem("gta5_sync_id") || "";
+    const syncInput = document.getElementById("sync-id");
+    const syncStatus = document.getElementById("sync-status");
+    if (syncInput && syncId) syncInput.value = syncId;
 
-    // === Marker Management ===
+    if (document.getElementById("btn-sync-new")) {
+        document.getElementById("btn-sync-new").onclick = async () => {
+            try {
+                syncStatus.textContent = "Creating...";
+                const resp = await fetch(CLOUD_API, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                    body: JSON.stringify(Array.from(foundLocations))
+                });
+                const locationStr = resp.headers.get("Location");
+                if (locationStr) {
+                    syncId = locationStr.split("/").pop();
+                    localStorage.setItem("gta5_sync_id", syncId);
+                    syncInput.value = syncId;
+                    syncStatus.textContent = "Created! Copy ID.";
+                } else {
+                    syncStatus.textContent = "Error creating.";
+                }
+            } catch (e) { syncStatus.textContent = "Error."; }
+        };
+
+        document.getElementById("btn-sync-pull").onclick = async () => {
+            const id = syncInput.value.trim();
+            if (!id) return;
+            try {
+                syncStatus.textContent = "Downloading...";
+                const resp = await fetch(`${CLOUD_API}/${id}`, { headers: { "Accept": "application/json" } });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    foundLocations = new Set(data);
+                    saveProgress();
+                    for (const locId in markerInstances) {
+                        const idInt = parseInt(locId);
+                        markerInstances[locId].marker.setOpacity(foundLocations.has(idInt) ? 0.4 : 1.0);
+                        const li = document.getElementById(`sidebar-loc-${idInt}`);
+                        if (li) {
+                            li.className = foundLocations.has(idInt) ? "found" : "";
+                            const check = li.querySelector(".sidebar-check");
+                            if (check) check.checked = foundLocations.has(idInt);
+                        }
+                    }
+                    syncId = id;
+                    localStorage.setItem("gta5_sync_id", syncId);
+                    syncStatus.textContent = "Synced!";
+                } else { syncStatus.textContent = "Not found."; }
+            } catch (e) { syncStatus.textContent = "Error."; }
+        };
+    }
+
+    async function pushToCloud() {
+        if (!syncId) return;
+        try {
+            syncStatus.textContent = "Saving to cloud...";
+            await fetch(`${CLOUD_API}/${syncId}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify(Array.from(foundLocations))
+            });
+            syncStatus.textContent = "Cloud saved.";
+            setTimeout(() => { if (syncStatus.textContent === "Cloud saved.") syncStatus.textContent = ""; }, 2000);
+        } catch (e) { syncStatus.textContent = "Cloud save failed."; }
+    }
+
     const STORAGE_KEY = 'gta5_found_locations_mapgenie';
     let foundLocations = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'));
     
+    let pushTimeout = null;
     function saveProgress() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(foundLocations)));
         updateProgressUI();
+        if (syncId) {
+            clearTimeout(pushTimeout);
+            pushTimeout = setTimeout(pushToCloud, 1500);
+        }
     }
 
     const markerInstances = {};
@@ -103,22 +288,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             sidebarList.appendChild(categoryDiv);
         }
 
-        renderMarkers();
-
     } catch (e) {
         console.error("Error loading locations:", e);
     }
 
-    function renderMarkers() {
+    function renderMarkers(isExact) {
+        if (!isExact) return; // Only render when locked
+
         for (const [type, data] of Object.entries(grouped)) {
             const layerGroup = layerGroups[type];
             const locList = document.getElementById(`list-${type.replace(/[^a-zA-Z0-9]/g, '-')}`);
             const color = data.color.startsWith('#') ? data.color : '#34495e';
 
             data.locations.forEach(loc => {
-                // Apply the perfect calibration
-                const mappedY = loc.latitude * CALIBRATION.scaleY + CALIBRATION.offsetY;
-                const mappedX = loc.longitude * CALIBRATION.scaleX + CALIBRATION.offsetX;
+                const c = window.currentCalibration;
+                
+                // === THE CRITICAL MERCATOR FIX ===
+                // Un-warp MapGenie lat/lng to Flat Meters first...
+                const pt = L.Projection.SphericalMercator.project(L.latLng(loc.latitude, loc.longitude));
+                
+                // ...THEN apply the linear scale!
+                const mappedY = pt.y * c.scaleY + c.offsetY;
+                const mappedX = pt.x * c.scaleX + c.offsetX;
 
                 const markerHtml = `<div style="background-color: ${color}; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid white; box-shadow: 0 0 3px rgba(0,0,0,0.5);"></div>`;
                 const icon = L.divIcon({ html: markerHtml, className: 'custom-marker', iconSize: [15, 15], iconAnchor: [7.5, 7.5] });
@@ -205,97 +396,3 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 });
-
-    // === Cloud Sync Feature ===
-    const CLOUD_API = "https://jsonblob.com/api/jsonBlob";
-    let syncId = localStorage.getItem("gta5_sync_id") || "";
-    const syncInput = document.getElementById("sync-id");
-    const syncStatus = document.getElementById("sync-status");
-    
-    if (syncId) syncInput.value = syncId;
-
-    document.getElementById("btn-sync-new").onclick = async () => {
-        try {
-            syncStatus.textContent = "Creating...";
-            const resp = await fetch(CLOUD_API, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                body: JSON.stringify(Array.from(foundLocations))
-            });
-            const locationStr = resp.headers.get("Location");
-            if (locationStr) {
-                syncId = locationStr.split("/").pop();
-                localStorage.setItem("gta5_sync_id", syncId);
-                syncInput.value = syncId;
-                syncStatus.textContent = "Created! Copy ID.";
-            } else {
-                syncStatus.textContent = "Error creating.";
-            }
-        } catch (e) {
-            syncStatus.textContent = "Error.";
-        }
-    };
-
-    document.getElementById("btn-sync-pull").onclick = async () => {
-        const id = syncInput.value.trim();
-        if (!id) return;
-        try {
-            syncStatus.textContent = "Downloading...";
-            const resp = await fetch(`${CLOUD_API}/${id}`, {
-                headers: { "Accept": "application/json" }
-            });
-            if (resp.ok) {
-                const data = await resp.json();
-                foundLocations = new Set(data);
-                saveProgress();
-                
-                // Re-render visuals
-                for (const locId in markerInstances) {
-                    const idInt = parseInt(locId);
-                    markerInstances[locId].marker.setOpacity(foundLocations.has(idInt) ? 0.4 : 1.0);
-                    const li = document.getElementById(`sidebar-loc-${idInt}`);
-                    if (li) {
-                        li.className = foundLocations.has(idInt) ? "found" : "";
-                        const check = li.querySelector(".sidebar-check");
-                        if (check) check.checked = foundLocations.has(idInt);
-                    }
-                }
-                
-                syncId = id;
-                localStorage.setItem("gta5_sync_id", syncId);
-                syncStatus.textContent = "Synced!";
-            } else {
-                syncStatus.textContent = "Not found.";
-            }
-        } catch (e) {
-            syncStatus.textContent = "Error.";
-        }
-    };
-
-    async function pushToCloud() {
-        if (!syncId) return;
-        try {
-            syncStatus.textContent = "Saving to cloud...";
-            await fetch(`${CLOUD_API}/${syncId}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                body: JSON.stringify(Array.from(foundLocations))
-            });
-            syncStatus.textContent = "Cloud saved.";
-            setTimeout(() => { if (syncStatus.textContent === "Cloud saved.") syncStatus.textContent = ""; }, 2000);
-        } catch (e) {
-            syncStatus.textContent = "Cloud save failed.";
-        }
-    }
-
-    // Wrap saveProgress to trigger cloud sync
-    const originalSaveProgress = saveProgress;
-    let pushTimeout = null;
-    saveProgress = function() {
-        originalSaveProgress();
-        if (syncId) {
-            clearTimeout(pushTimeout);
-            pushTimeout = setTimeout(pushToCloud, 1500); // Debounce
-        }
-    };
-
