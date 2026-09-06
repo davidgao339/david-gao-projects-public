@@ -6,22 +6,26 @@
     <title>GTA V Map Collectibles</title>
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <!-- FontAwesome for Vector Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div id="app">
         <div id="sidebar">
-            <h2>GTA V Collectibles</h2>
+            <div class="sidebar-header">
+                <h2>GTA V Collectibles</h2>
+            </div>
             
             <div id="cloud-sync-panel">
-                <h4>☁️ Cloud Sync</h4>
+                <h4><i class="fas fa-cloud"></i> Cloud Sync</h4>
                 <p>Sync progress between phone and PC!</p>
                 <div class="sync-row">
                     <input type="text" id="sync-id" placeholder="Paste Sync ID here...">
-                    <button id="btn-sync-pull">Download</button>
+                    <button id="btn-sync-pull"><i class="fas fa-download"></i></button>
                 </div>
                 <div class="sync-row">
-                    <button id="btn-sync-new">Create New Sync ID</button>
+                    <button id="btn-sync-new">Create New ID</button>
                     <span id="sync-status"></span>
                 </div>
             </div>
@@ -35,8 +39,13 @@
                 </select>
             </div>
 
+            <div class="filter-controls">
+                <button id="btn-show-all">Show All</button>
+                <button id="btn-hide-all">Hide All</button>
+            </div>
+
             <div id="category-list">
-                <!-- Categories and markers populated here by app.js -->
+                <!-- Categories populated here by app.js -->
             </div>
         </div>
         <div id="map-container">
