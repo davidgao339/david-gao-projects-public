@@ -265,6 +265,38 @@ def score_eps_consistency(net_income_history: list,
     return score, f"{positive}/{total} profitable yrs{cagr_str}"
 
 
+def score_revenue_consistency(revenue_history: list) -> tuple[float, str]:
+    """
+    Revenue growing consistently with no YoY declines.
+    Weight: 55% consistency (no declines), 45% CAGR.
+    Used in T2 of the 12-tenet scorecard; not part of the main 100-point score.
+    """
+    valid = [x for x in revenue_history if x and x > 0]
+    if len(valid) < 2:
+        return 0.3, "Insufficient revenue data"
+
+    declines = sum(1 for i in range(len(valid) - 1) if valid[i] < valid[i + 1])
+    total_pairs = len(valid) - 1
+    consistency = max(0.0, 1.0 - declines / total_pairs * 1.5)
+
+    n = len(valid) - 1
+    cagr_pct = ((valid[0] / valid[-1]) ** (1 / n) - 1) * 100
+    if cagr_pct >= 10:
+        growth = 1.0
+    elif cagr_pct >= 7:
+        growth = 0.80
+    elif cagr_pct >= 4:
+        growth = 0.60
+    elif cagr_pct >= 0:
+        growth = 0.35
+    else:
+        growth = 0.10
+
+    score = consistency * 0.55 + growth * 0.45
+    decline_str = f"{declines}/{total_pairs} YoY decline{'s' if declines != 1 else ''}"
+    return score, f"Rev CAGR {cagr_pct:.1f}% · {decline_str}"
+
+
 def score_return_on_equity(roe_values: list,
                            debt_to_equity: Optional[float] = None) -> tuple[float, str]:
     """
@@ -333,45 +365,80 @@ def score_roic(roic_values: list) -> tuple[float, str]:
     return score, f"Avg ROIC {avg_roic:.1f}%"
 
 
-def score_profit_margins(gross_margin: Optional[float],
-                          net_margin: Optional[float]) -> tuple[float, str]:
+def _sector_calibration(sector: str, industry: str) -> tuple[list, list, str]:
     """
-    Gross >40% and Net >20% signal durable pricing power — Buffett's moat.
-    Commodity businesses with thin margins fail this screen.
+    Return (gm_tiers, nm_tiers, label) for the sector.
+    Tiers: [(decimal_threshold, score_fraction), ...] in descending threshold order.
+    IT resellers are structurally capped — Buffett's framework can't grade them on margins alone.
+    """
+    s = (sector or "").lower()
+    i = (industry or "").lower()
+    if "software" in i:
+        return (
+            [(0.75, 1.0), (0.60, 0.80), (0.45, 0.55), (0.30, 0.30), (0, 0.10)],
+            [(0.25, 1.0), (0.18, 0.75), (0.10, 0.50), (0.05, 0.25), (0, 0.05)],
+            "SaaS/Software",
+        )
+    if any(k in i for k in ("distribution", "wholesale", "electronics & computer")):
+        # Structurally capped — full marks at much lower thresholds
+        return (
+            [(0.20, 0.80), (0.12, 0.60), (0.08, 0.40), (0.04, 0.20), (0, 0.05)],
+            [(0.05, 0.80), (0.03, 0.55), (0.01, 0.30), (0, 0.10)],
+            "IT Reseller (structural margin cap)",
+        )
+    if "retail" in i or "apparel" in i or "store" in i:
+        return (
+            [(0.45, 1.0), (0.35, 0.85), (0.25, 0.60), (0.15, 0.35), (0, 0.10)],
+            [(0.10, 1.0), (0.08, 0.80), (0.05, 0.55), (0.02, 0.25), (0, 0.05)],
+            "Specialty Retail",
+        )
+    if "financial" in s or "bank" in i or "insurance" in i:
+        # Gross margin not meaningful for financials — score on net only
+        return (
+            [],
+            [(0.20, 1.0), (0.15, 0.80), (0.10, 0.55), (0.05, 0.30), (0, 0.10)],
+            "Financial Services",
+        )
+    return (
+        [(0.60, 1.0), (0.40, 0.85), (0.25, 0.55), (0.15, 0.30), (0, 0.10)],
+        [(0.20, 1.0), (0.15, 0.80), (0.10, 0.60), (0.05, 0.35), (0, 0.10)],
+        "General",
+    )
+
+
+def _tier_score(value: float, tiers: list) -> float:
+    for threshold, score in tiers:
+        if value >= threshold:
+            return score
+    return 0.0
+
+
+def score_profit_margins(gross_margin: Optional[float],
+                          net_margin: Optional[float],
+                          sector: str = "",
+                          industry: str = "") -> tuple[float, str]:
+    """
+    Gross and net margin scoring with sector-calibrated benchmarks.
+    SaaS software, specialty retail, IT resellers, and financials each get appropriate thresholds.
     """
     if gross_margin is None and net_margin is None:
         return 0.3, "No margin data"
 
+    gm_tiers, nm_tiers, sector_label = _sector_calibration(sector, industry)
+
     scores = []
-    parts = []
+    parts = [f"[{sector_label}]"]
 
-    if gross_margin is not None:
-        gm = gross_margin * 100
-        if gm >= 60:
-            scores.append(1.0)
-        elif gm >= 40:
-            scores.append(0.85)
-        elif gm >= 25:
-            scores.append(0.55)
-        elif gm >= 15:
-            scores.append(0.30)
-        else:
-            scores.append(0.10)
-        parts.append(f"GM {gm:.0f}%")
+    if gross_margin is not None and gm_tiers:
+        scores.append(_tier_score(gross_margin, gm_tiers))
+        parts.append(f"GM {gross_margin*100:.0f}%")
 
-    if net_margin is not None:
-        nm = net_margin * 100
-        if nm >= 20:
-            scores.append(1.0)
-        elif nm >= 15:
-            scores.append(0.80)
-        elif nm >= 10:
-            scores.append(0.60)
-        elif nm >= 5:
-            scores.append(0.35)
-        else:
-            scores.append(0.10)
-        parts.append(f"NM {nm:.0f}%")
+    if net_margin is not None and nm_tiers:
+        scores.append(_tier_score(net_margin, nm_tiers))
+        parts.append(f"NM {net_margin*100:.0f}%")
+
+    if not scores:
+        return 0.3, f"[{sector_label}] No usable margin data"
 
     return float(np.mean(scores)), " | ".join(parts)
 
@@ -593,7 +660,14 @@ class StockData:
     interest_expense_history: list = field(default_factory=list)
     da_history: list = field(default_factory=list)
     capex_history: list = field(default_factory=list)
+    sbc_history: list = field(default_factory=list)
+    change_in_wc_history: list = field(default_factory=list)
+    cash_history: list = field(default_factory=list)
     owner_earnings_history: list = field(default_factory=list)
+    smoothed_capex_history: list = field(default_factory=list)
+    revenue_history: list = field(default_factory=list)
+    operating_cash_flow_history: list = field(default_factory=list)
+    retained_earnings_history: list = field(default_factory=list)
     last_report_date: str = ""
     error: str = ""
 
@@ -680,6 +754,7 @@ def fetch_stock_data(ticker: str, delay: float = 0.5) -> StockData:
                 pass
             sd.net_income_history = _extract_row(
                 inc, ["Net Income", "Net Income Common Stockholders"])
+            sd.revenue_history = _extract_row(inc, ["Total Revenue"])
             sd.ebit_history = _extract_row(
                 inc, ["EBIT", "Operating Income"])
             raw_ie = _extract_row(inc, ["Interest Expense", "Net Interest Income"])
@@ -699,23 +774,37 @@ def fetch_stock_data(ticker: str, delay: float = 0.5) -> StockData:
                          "Depreciation Amortization Depletion"])
                 raw_cx = _extract_row(cf, ["Capital Expenditure", "Capital Expenditures"])
                 sd.capex_history = [abs(v) if v < 0 else v for v in raw_cx]
+                sd.operating_cash_flow_history = _extract_row(
+                    cf, ["Operating Cash Flow",
+                         "Total Cash From Operating Activities"])
+                sd.sbc_history = _extract_row(cf, ["Stock Based Compensation", "Share Based Compensation"])
+                sd.change_in_wc_history = _extract_row(cf, ["Change In Working Capital", "Changes In Working Capital"])
         except Exception:
             pass
 
-        # ── Owner earnings: NI + D&A − CapEx ──
-        if sd.net_income_history and sd.da_history:
-            if sd.capex_history:
-                n = min(len(sd.net_income_history), len(sd.da_history), len(sd.capex_history))
-                sd.owner_earnings_history = [
-                    sd.net_income_history[i] + sd.da_history[i] - sd.capex_history[i]
-                    for i in range(n)
-                ]
-            else:
-                n = min(len(sd.net_income_history), len(sd.da_history))
-                sd.owner_earnings_history = [
-                    sd.net_income_history[i] + sd.da_history[i]
-                    for i in range(n)
-                ]
+        # ── Owner earnings: NI + D&A + Change_in_WC − CapEx - SBC ──
+        # CapEx Smoothing
+        sd.smoothed_capex_history = []
+        if sd.capex_history and sd.revenue_history:
+            n_ratio = min(len(sd.capex_history), len(sd.revenue_history))
+            if n_ratio > 0:
+                capex_ratios = [sd.capex_history[i] / sd.revenue_history[i] for i in range(n_ratio) if sd.revenue_history[i] > 0]
+                avg_capex_ratio = sum(capex_ratios) / len(capex_ratios) if capex_ratios else 0
+                sd.smoothed_capex_history = [rev * avg_capex_ratio for rev in sd.revenue_history]
+        elif sd.capex_history:
+            sd.smoothed_capex_history = sd.capex_history
+
+        if sd.operating_cash_flow_history:
+            n = len(sd.operating_cash_flow_history)
+            oe_hist = []
+            for i in range(n):
+                ocf = sd.operating_cash_flow_history[i]
+                cx = sd.smoothed_capex_history[i] if i < len(sd.smoothed_capex_history) else 0
+                sbc = sd.sbc_history[i] if i < len(sd.sbc_history) else 0
+                
+                oe = ocf - cx - sbc
+                oe_hist.append(oe)
+            sd.owner_earnings_history = oe_hist
 
         # ── EPS fallback: compute from NI / shares ──
         if not sd.eps_history:
@@ -741,6 +830,23 @@ def fetch_stock_data(ticker: str, delay: float = 0.5) -> StockData:
                     ld = bs.loc[debt_row, bs.columns[0]]
                     if pd.notna(ld):
                         sd.long_term_debt = float(ld)
+
+                re_row = next(
+                    (c for c in ["Retained Earnings"] if c in bs.index), None)
+                if re_row:
+                    sd.retained_earnings_history = [
+                        float(bs.loc[re_row, col])
+                        for col in bs.columns
+                        if pd.notna(bs.loc[re_row, col])
+                    ]
+
+                cash_row = next((c for c in ["Cash And Cash Equivalents", "Cash Cash Equivalents And Short Term Investments", "Total Cash"] if c in bs.index), None)
+                if cash_row:
+                    sd.cash_history = [
+                        float(bs.loc[cash_row, col])
+                        for col in bs.columns
+                        if pd.notna(bs.loc[cash_row, col])
+                    ]
 
                 if eq_row and sd.net_income_history:
                     roes = []
@@ -771,7 +877,13 @@ def fetch_stock_data(ticker: str, delay: float = 0.5) -> StockData:
                             ebit = sd.ebit_history[i]
                             if eq and eq > 0 and ebit:
                                 nopat = ebit * (1 - tax_rate)
-                                ic = eq + (debt or 0)
+                                
+                                cash = sd.cash_history[i] if i < len(sd.cash_history) else 0
+                                rev = sd.revenue_history[i] if i < len(sd.revenue_history) else 0
+                                operating_cash = 0.02 * rev
+                                excess_cash = max(0, cash - operating_cash)
+                                
+                                ic = eq + (debt or 0) - excess_cash
                                 if ic > 0:
                                     roics.append(nopat / ic)
                     sd.roic_values = roics
@@ -810,6 +922,9 @@ def fetch_stock_data(ticker: str, delay: float = 0.5) -> StockData:
                 # Prepend TTM values so scoring functions use the most current figures
                 if ttm_ebit is not None:
                     sd.ebit_history = [ttm_ebit] + (sd.ebit_history or [])
+                ttm_rev = _ttm_row(q_inc, ["Total Revenue"])
+                if ttm_rev is not None:
+                    sd.revenue_history = [ttm_rev] + (sd.revenue_history or [])
                 if ttm_ie is not None:
                     sd.interest_expense_history = (
                         [abs(ttm_ie) if ttm_ie < 0 else ttm_ie]
@@ -822,11 +937,25 @@ def fetch_stock_data(ticker: str, delay: float = 0.5) -> StockData:
                                              "Depreciation Amortization Depletion"])
                 ttm_capex = _ttm_row(q_cf, ["Capital Expenditure",
                                              "Capital Expenditures"])
+                ttm_sbc   = _ttm_row(q_cf, ["Stock Based Compensation", "Share Based Compensation"])
+                ttm_wc    = _ttm_row(q_cf, ["Change In Working Capital", "Changes In Working Capital"])
 
-                if ttm_ni is not None and ttm_da is not None:
+                ttm_ocf = _ttm_row(q_cf, ["Operating Cash Flow",
+                                           "Total Cash From Operating Activities"])
+                
+                if ttm_ocf is not None:
                     capex_abs = abs(ttm_capex) if ttm_capex and ttm_capex < 0 else (ttm_capex or 0)
-                    ttm_oe = ttm_ni + ttm_da - capex_abs
+                    sbc = ttm_sbc if ttm_sbc else 0
+                    ttm_oe = ttm_ocf - capex_abs - sbc
+                    
                     sd.owner_earnings_history = [ttm_oe] + (sd.owner_earnings_history or [])
+                    sd.net_income_history = [ttm_ni] + (sd.net_income_history or []) if ttm_ni else sd.net_income_history
+                    sd.da_history = [ttm_da] + (sd.da_history or []) if ttm_da else sd.da_history
+                    sd.capex_history = [capex_abs] + (sd.capex_history or [])
+                    sd.smoothed_capex_history = [capex_abs] + (sd.smoothed_capex_history or [])
+                    sd.sbc_history = [sbc] + (sd.sbc_history or [])
+                    sd.change_in_wc_history = [ttm_wc] + (sd.change_in_wc_history or []) if ttm_wc else sd.change_in_wc_history
+                    sd.operating_cash_flow_history = [ttm_ocf] + (sd.operating_cash_flow_history or [])
 
             if q_bs is not None and not q_bs.empty:
                 ld_row = next(
@@ -897,7 +1026,7 @@ def fetch_with_cache(ticker: str, cache_dir: Optional[str],
 # ──────────────────────────────────────────────
 
 def compute_score(sd: StockData) -> dict:
-    """Run all scoring functions and return a results dict."""
+    """Run all scoring functions and return a results dict including 12-tenet map."""
     if sd.market_cap:
         mkt_flag = (f"${sd.market_cap/1e9:.2f}B" if sd.market_cap >= 1_000_000_000
                     else f"${sd.market_cap/1e6:.0f}M")
@@ -912,7 +1041,7 @@ def compute_score(sd: StockData) -> dict:
     s1, d1 = score_eps_consistency(sd.net_income_history, sd.eps_history)
     s2, d2 = score_return_on_equity(sd.roe_values, sd.debt_to_equity)
     s3, d3 = score_roic(sd.roic_values)
-    s4, d4 = score_profit_margins(sd.gross_margin, sd.net_margin)
+    s4, d4 = score_profit_margins(sd.gross_margin, sd.net_margin, sd.sector, sd.industry)
     s5, d5 = score_debt_liquidity(
         sd.debt_to_equity, sd.long_term_debt, avg_ni,
         sd.current_ratio, interest_exp, ebit,
@@ -923,6 +1052,7 @@ def compute_score(sd: StockData) -> dict:
         sd.trailing_pe, sd.forward_pe,
     )
     s7, d7 = score_capital_allocation(sd.net_income_history, sd.eps_history)
+    s_rev, d_rev = score_revenue_consistency(sd.revenue_history)
 
     w = WEIGHTS
     total = (
@@ -934,6 +1064,54 @@ def compute_score(sd: StockData) -> dict:
         s6 * w["owner_earnings_yield"] +
         s7 * w["capital_allocation"]
     )
+
+    # ── EV / EBITDA ───────────────────────────────────────────────────────────
+    ev_ebitda: Optional[float] = None
+    da = sd.da_history[0] if sd.da_history else None
+    if ebit is not None and da is not None and sd.market_cap:
+        ebitda = ebit + da
+        ev = sd.market_cap + (sd.total_debt or 0) - (sd.total_cash or 0)
+        if ebitda > 0:
+            ev_ebitda = round(ev / ebitda, 1)
+
+    # ── FCF conversion: (OCF − CapEx) / Net Income ───────────────────────────
+    fcf_conversion: Optional[float] = None
+    if sd.operating_cash_flow_history and sd.net_income_history:
+        ocf = sd.operating_cash_flow_history[0]
+        ni  = sd.net_income_history[0]
+        capex = sd.capex_history[0] if sd.capex_history else 0
+        if ni and ni > 0 and ocf is not None:
+            true_fcf = ocf - abs(capex)
+            fcf_conversion = round(true_fcf / ni * 100, 1)
+
+    # ── 12-tenet scorecard map (T10/T11/T12 filled by caller after MOS/T10 fetch) ──
+    def _grade(s: float) -> str:
+        return "Pass" if s >= 0.75 else "Partial" if s >= 0.40 else "Fail"
+
+    oe_positive = any(x and x > 0 for x in (sd.owner_earnings_history or []))
+    t8_detail = d6
+    if fcf_conversion is not None:
+        conv_flag = "✓" if fcf_conversion >= 80 else "⚠"
+        t8_detail += f" · FCF conv {fcf_conversion:.0f}% {conv_flag}"
+    t8_grade = _grade(s6) if oe_positive else "Fail"
+    if t8_grade == "Pass" and fcf_conversion is not None and fcf_conversion < 80:
+        t8_grade = "Partial"
+
+    tenet_scores = {
+        1:  ("Review",  "Qualitative — can you describe the business in 2 sentences without jargon?"),
+        2:  (_grade((s1 + s_rev) / 2),
+             f"EPS: {d1} · Revenue: {d_rev}"),
+        3:  ("Review",  "Qualitative — assess industry tailwind AND company moat separately."),
+        4:  (_grade(s7), d7),
+        5:  ("Review",  "Qualitative — does MD&A name specific problems with numbers, or is it vague?"),
+        6:  ("Review",  "Qualitative — concrete hard decision against short-term optics required."),
+        7:  (_grade(s2), d2),
+        8:  (t8_grade,  t8_detail),
+        9:  (_grade(s4), d4),
+        10: ("Deferred", "Computed separately — requires price history download."),
+        11: ("Deferred", f"EV/EBITDA {ev_ebitda}× · forward P/E {sd.forward_pe} · see DCF below."),
+        12: ("Deferred", "See margin of safety section above."),
+    }
 
     return {
         "Ticker":                    sd.ticker,
@@ -948,6 +1126,10 @@ def compute_score(sd: StockData) -> dict:
         "Debt & Liquidity (15)":     f"{s5*15:.0f} — {d5}",
         "Owner Earnings Yield (15)": f"{s6*15:.0f} — {d6}",
         "Capital Allocation (10)":   f"{s7*10:.0f} — {d7}",
+        "Revenue Consistency":       d_rev,
+        "EV/EBITDA":                 ev_ebitda,
+        "FCF Conversion":            fcf_conversion,
+        "tenet_scores":              tenet_scores,
         "Error":                     sd.error,
     }
 
@@ -956,28 +1138,81 @@ def compute_score(sd: StockData) -> dict:
 # MARGIN OF SAFETY — OWNER EARNINGS DCF
 # ──────────────────────────────────────────────
 
-def _owner_earnings_dcf(oe_per_share: float,
+def _owner_earnings_dcf(oe_total: float,
                          growth_rate: float,
                          discount_rate: float = 0.09,
                          terminal_growth: float = 0.03,
-                         years: int = 10) -> float:
+                         years: int = 10,
+                         verbose: bool = False,
+                         label: str = "") -> tuple[float, list[dict]]:
     """
-    10-year DCF of owner earnings per share.
-    Growth capped at 15% (conservative). Terminal value via Gordon Growth Model.
+    10-year DCF of total owner earnings → Enterprise Value.
+    Caller must subtract net debt and divide by shares to reach per-share equity value.
+    Growth capped at 40% (hyper-growth). 3-Stage fading logic. Terminal value via Gordon Growth Model.
     Discount rate 9% ≈ long-run equity return expectation.
     """
-    g = min(max(growth_rate, 0.0), 0.15)
-    pv = sum(
-        oe_per_share * (1 + g) ** yr / (1 + discount_rate) ** yr
-        for yr in range(1, years + 1)
-    )
-    terminal_oe = oe_per_share * (1 + g) ** years * (1 + terminal_growth)
+    g = min(max(growth_rate, 0.0), 0.40)
+    pv = 0
+    current_oe = oe_total
+    breakdown = []
+    
+    if verbose:
+        print(f"\n  --- {label} DCF Breakdown ---")
+        print(f"  Base OE: ${oe_total:,.2f}  |  Initial Growth Rate: {g*100:.1f}%")
+        print(f"  {'Year':<6} | {'Growth Rate':<12} | {'Future OE':<16} | {'Present Value':<16}")
+        print(f"  {'-'*62}")
+
+    for yr in range(1, years + 1):
+        if yr <= 3:
+            current_g = g
+        elif yr <= 6 and g > 0.15:
+            # Stage 2: Gravity Phase (Years 4-6)
+            fade_step = (0.15 - 0.10) / 2
+            current_g = 0.15 - fade_step * (yr - 4)
+        else:
+            # Stage 3 or standard fade
+            if g > 0.15:
+                fade_step = (0.10 - terminal_growth) / 3
+                current_g = 0.10 - fade_step * (yr - 7)
+            else:
+                fade_step = (g - terminal_growth) / (years - 3)
+                current_g = g - fade_step * (yr - 3)
+        current_oe *= (1 + current_g)
+        yr_pv = current_oe / (1 + discount_rate) ** yr
+        pv += yr_pv
+        
+        breakdown.append({
+            "Year": str(yr),
+            "Growth Rate": f"{current_g*100:.1f}%",
+            "Future OE": current_oe,
+            "Present Value": yr_pv
+        })
+        
+        if verbose:
+            print(f"  {yr:<6} | {current_g*100:>11.1f}% | ${current_oe:>14,.2f} | ${yr_pv:>14,.2f}")
+
+    terminal_oe = current_oe * (1 + terminal_growth)
+    terminal_pv = 0
     if discount_rate > terminal_growth:
-        pv += (terminal_oe / (discount_rate - terminal_growth)) / (1 + discount_rate) ** years
-    return pv
+        terminal_pv = (terminal_oe / (discount_rate - terminal_growth)) / (1 + discount_rate) ** years
+        pv += terminal_pv
+
+    breakdown.append({
+        "Year": "Term.",
+        "Growth Rate": f"{terminal_growth*100:.1f}%",
+        "Future OE": terminal_oe,
+        "Present Value": terminal_pv
+    })
+
+    if verbose:
+        print(f"  {'-'*62}")
+        print(f"  {'Term.':<6} | {terminal_growth*100:>11.1f}% | ${terminal_oe:>14,.2f} | ${terminal_pv:>14,.2f}")
+        print(f"  Total Enterprise Value (PV): ${pv:,.2f}")
+
+    return pv, breakdown
 
 
-def margin_of_safety(sd: StockData) -> dict:
+def margin_of_safety(sd: StockData, verbose: bool = False) -> dict:
     """
     Intrinsic value via owner earnings DCF (bull + bear scenarios).
     MOS entry = 30% discount to bull-case intrinsic value.
@@ -994,20 +1229,26 @@ def margin_of_safety(sd: StockData) -> dict:
         return {**empty, "MOS Status": "Price unavailable"}
     empty["Price"] = round(price, 2)
 
-    # Owner earnings per share
+    shares = sd.shares_outstanding if sd.shares_outstanding and sd.shares_outstanding > 0 else None
+
+    # Total owner earnings (absolute $, not per-share) — used for enterprise-level DCF
     valid_oe = [x for x in sd.owner_earnings_history
                 if x is not None and not np.isnan(x)] if sd.owner_earnings_history else []
 
-    if valid_oe and sd.shares_outstanding and sd.shares_outstanding > 0:
-        oe_ps = np.mean(valid_oe) / sd.shares_outstanding
-    elif sd.trailing_eps:
-        oe_ps = sd.trailing_eps
+    if valid_oe:
+        oe_total = float(np.mean(valid_oe))
+    elif sd.trailing_eps and shares:
+        oe_total = sd.trailing_eps * shares
     else:
         return {**empty, "MOS Status": "No earnings data"}
 
-    if not oe_ps or oe_ps <= 0:
+    if oe_total <= 0:
         return {**empty, "MOS Status": "Negative owner earnings"}
-    empty["OE/Share"] = round(float(oe_ps), 2)
+
+    # Expose OE/share for display only
+    oe_ps_display = oe_total / shares if shares else None
+    if oe_ps_display:
+        empty["OE/Share"] = round(oe_ps_display, 2)
 
     # Historical growth rate — prefer OE series, fall back to NI
     growth_rate = 0.05
@@ -1018,13 +1259,55 @@ def margin_of_safety(sd: StockData) -> dict:
             growth_rate = (vals[0] / vals[-1]) ** (1 / n) - 1
             break
 
-    bull_g = min(max(growth_rate, 0.0), 0.15)
+    bull_g = min(max(growth_rate, 0.0), 0.40)
     # Bear: 60% of bull when growth is meaningful; flat/slight decline when near zero
-    bear_g = bull_g * 0.60 if bull_g > 0.01 else max(bull_g - 0.02, -0.02)
+    if bull_g > 0.20:
+        bear_g = 0.12
+    else:
+        bear_g = bull_g * 0.60 if bull_g > 0.01 else max(bull_g - 0.02, -0.02)
 
-    intrinsic_high = _owner_earnings_dcf(oe_ps, bull_g)
-    intrinsic_low  = _owner_earnings_dcf(oe_ps, bear_g)
+    # DCF at enterprise level, then subtract net debt to get equity value.
+    # This prevents over-leveraged companies from appearing cheap purely on cash-flow yield.
+    net_debt = 0.0
+    if sd.total_debt and sd.total_debt > 0:
+        cash = sd.total_cash if sd.total_cash and sd.total_cash > 0 else 0.0
+        net_debt = sd.total_debt - cash  # can be negative (net cash) — that's fine
+
+    ev_high, breakdown_high = _owner_earnings_dcf(oe_total, bull_g, verbose=verbose, label="Bull Case")
+    ev_low, breakdown_low  = _owner_earnings_dcf(oe_total, bear_g, verbose=verbose, label="Bear Case")
+
+    equity_high = max(ev_high - net_debt, 0.0)
+    equity_low  = max(ev_low  - net_debt, 0.0)
+    
+    if verbose:
+        print(f"\n  --- Enterprise to Equity Bridge ---")
+        print(f"  Net Debt (Total Debt - Excess Cash): ${net_debt:,.2f}")
+        print(f"  Total Shares Outstanding:            {shares:,.0f}")
+        print(f"  Bull Case Equity Value:              ${equity_high:,.2f}  (Per Share: ${equity_high/shares:,.2f})")
+        print(f"  Bear Case Equity Value:              ${equity_low:,.2f}  (Per Share: ${equity_low/shares:,.2f})")
+        print(f"  {'-'*62}\n")
+
+    if not shares:
+        return {**empty, "MOS Status": "Shares data unavailable"}
+
+    intrinsic_high = equity_high / shares
+    intrinsic_low  = equity_low  / shares
     mos_entry      = intrinsic_high * 0.70  # 30% discount to bull IV
+
+    if intrinsic_high <= 0:
+        return {
+            "Price":          round(price, 2),
+            "OE/Share":       round(oe_ps_display, 2) if oe_ps_display else None,
+            "Intrinsic Low":  0.0,
+            "Intrinsic High": 0.0,
+            "MOS Entry":      0.0,
+            "MOS Status":     "DEBT EXCEEDS ENTERPRISE VALUE",
+            "Bull Breakdown": breakdown_high,
+            "Bear Breakdown": breakdown_low,
+            "Base OE": oe_total,
+            "Net Debt": net_debt,
+            "Shares": shares
+        }
 
     if price <= mos_entry:
         status = "IN MOS ZONE"
@@ -1035,11 +1318,16 @@ def margin_of_safety(sd: StockData) -> dict:
 
     return {
         "Price":          round(price, 2),
-        "OE/Share":       round(float(oe_ps), 2),
+        "OE/Share":       round(oe_ps_display, 2) if oe_ps_display else None,
         "Intrinsic Low":  round(intrinsic_low, 2),
         "Intrinsic High": round(intrinsic_high, 2),
         "MOS Entry":      round(mos_entry, 2),
         "MOS Status":     status,
+        "Bull Breakdown": breakdown_high,
+        "Bear Breakdown": breakdown_low,
+        "Base OE": oe_total,
+        "Net Debt": net_debt,
+        "Shares": shares
     }
 
 
@@ -1049,11 +1337,83 @@ def margin_of_safety_summary(sd: StockData) -> str:
         return m["MOS Status"]
     if m["OE/Share"] is None:
         return f"Price: ${m['Price']} | {m['MOS Status']}"
+    iv_l_pct = f"{((m['Intrinsic Low'] - m['Price']) / m['Price'] * 100):+.1f}%" if m.get('Intrinsic Low') and m.get('Price') else "N/A"
+    iv_h_pct = f"{((m['Intrinsic High'] - m['Price']) / m['Price'] * 100):+.1f}%" if m.get('Intrinsic High') and m.get('Price') else "N/A"
     return (
         f"Price: ${m['Price']} | OE/Sh: ${m['OE/Share']} | "
-        f"IV: ${m['Intrinsic Low']}-${m['Intrinsic High']} | "
+        f"IV: ${m['Intrinsic Low']} ({iv_l_pct}) - ${m['Intrinsic High']} ({iv_h_pct}) | "
         f"MOS entry: ${m['MOS Entry']} | {m['MOS Status']}"
     )
+
+
+def compute_tenet10(sd: StockData) -> dict:
+    """
+    Tenet 10: $1 of retained earnings → $1+ of market value created.
+    Compares cumulative retained earnings per share against stock CAGR vs S&P 500
+    over the available balance sheet window (typically 3–4 years).
+    Requires yfinance price history — adds ~1s latency per call.
+    """
+    result: dict = {
+        "grade": "Insufficient data",
+        "period": None,
+        "re_delta_ps": None,
+        "stock_cagr": None,
+        "sp500_cagr": None,
+        "evidence": "Need ≥2 years of retained earnings on the balance sheet.",
+    }
+
+    re_vals = [x for x in (sd.retained_earnings_history or []) if x is not None]
+    if len(re_vals) < 2 or not sd.shares_outstanding or sd.shares_outstanding <= 0:
+        return result
+
+    n = len(re_vals) - 1          # years in window (most-recent-first)
+    re_delta = re_vals[0] - re_vals[n]
+    re_delta_ps = re_delta / sd.shares_outstanding
+    result["re_delta_ps"] = round(re_delta_ps, 2)
+    result["period"] = n
+
+    try:
+        period_str = f"{n + 1}y"
+        hist = yf.download(sd.ticker, period=period_str,
+                           auto_adjust=True, progress=False)
+        if hist.empty or len(hist) < 20:
+            result["evidence"] = (
+                f"RE/sh Δ${re_delta_ps:+.2f} over {n}yr — price history unavailable.")
+            return result
+
+        price_start = float(hist["Close"].iloc[0])
+        price_end   = float(hist["Close"].iloc[-1])
+        stock_cagr  = (price_end / price_start) ** (1 / n) - 1
+        result["stock_cagr"] = round(stock_cagr * 100, 1)
+
+        sp_hist = yf.download("^GSPC", period=period_str,
+                              auto_adjust=True, progress=False)
+        sp500_cagr: Optional[float] = None
+        if not sp_hist.empty and len(sp_hist) >= 20:
+            sp_cagr = (float(sp_hist["Close"].iloc[-1]) /
+                       float(sp_hist["Close"].iloc[0])) ** (1 / n) - 1
+            sp500_cagr = round(sp_cagr * 100, 1)
+            result["sp500_cagr"] = sp500_cagr
+
+        beats_sp = sp500_cagr is None or stock_cagr * 100 >= sp500_cagr
+        if re_delta_ps > 0 and beats_sp:
+            result["grade"] = "Pass"
+        elif re_delta_ps > 0 or stock_cagr > 0:
+            result["grade"] = "Partial"
+        else:
+            result["grade"] = "Fail"
+
+        sp_str = f" vs S&P {sp500_cagr:.1f}%" if sp500_cagr is not None else ""
+        result["evidence"] = (
+            f"RE/sh Δ${re_delta_ps:+.2f} over {n}yr · "
+            f"stock CAGR {stock_cagr * 100:.1f}%{sp_str}"
+        )
+
+    except Exception as e:
+        result["evidence"] = (
+            f"RE/sh Δ${re_delta_ps:+.2f} over {n}yr — price fetch failed: {e}")
+
+    return result
 
 
 # ──────────────────────────────────────────────
@@ -1102,7 +1462,7 @@ def analyze_ticker(ticker: str, cache_dir: Optional[str] = None) -> None:
     print(f"\n{'─'*65}")
     print("  MARGIN OF SAFETY  (Owner Earnings DCF @ 9% discount, 3% terminal)")
     print(f"{'─'*65}")
-    m = margin_of_safety(sd)
+    m = margin_of_safety(sd, verbose=True)
     if m["Price"] is None:
         print(f"  {m['MOS Status']}")
     elif m["OE/Share"] is None:

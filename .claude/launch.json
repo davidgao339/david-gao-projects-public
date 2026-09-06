@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "daycare-receipts",
+      "runtimeExecutable": "streamlit",
+      "runtimeArgs": ["run", "daycare-receipts/app.py", "--server.headless", "true"],
+      "port": 8501
+    },
+    {
+      "name": "daycare-receipts-test",
+      "runtimeExecutable": "streamlit",
+      "runtimeArgs": ["run", "daycare-receipts/app.py", "--server.headless", "true", "--server.port", "8502"],
+      "port": 8502
+    }
+  ]
+}

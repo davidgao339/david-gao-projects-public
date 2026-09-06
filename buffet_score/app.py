@@ -4,10 +4,12 @@ Run: streamlit run app.py
 """
 
 import numpy as np
+import pandas as pd
 import requests
 import streamlit as st
 
-from buffett_screener import fetch_with_cache, compute_score, margin_of_safety
+from buffett_screener import (fetch_with_cache, compute_score, margin_of_safety,
+                              compute_tenet10)
 
 # ─────────────────────────────────────────────
 # VERDICT
@@ -327,18 +329,19 @@ def build_score_context(sd, r: dict) -> dict:
     else:
         ctx["ROIC"] = "ROIC data unavailable — no partial credit awarded"
 
-    # ── Profit Margins ──
+    # ── Revenue Consistency ──
+    rev_note = r.get("Revenue Consistency", "")
+    ctx["Revenue Consistency"] = rev_note if rev_note else "No revenue data"
+
+    # ── Profit Margins (sector-calibrated) ──
+    margin_detail = r.get("Margins (10)", "")
+    # The detail string already includes sector label from _sector_calibration
     gm = (sd.gross_margin or 0) * 100
     nm = (sd.net_margin  or 0) * 100
-    gm_tier = ("≥60% = exceptional" if gm >= 60
-               else "≥40% moat signal" if gm >= 40
-               else "≥25% thin" if gm >= 25
-               else "below 25% — commodity-like")
-    nm_tier = ("≥20% = full marks" if nm >= 20
-               else "≥15% good" if nm >= 15
-               else "≥10% acceptable" if nm >= 10
-               else "below 10% — below target")
-    ctx["Profit Margins"] = f"Gross {gm:.0f}% ({gm_tier})  ·  Net {nm:.0f}% ({nm_tier})"
+    ctx["Profit Margins"] = (
+        f"Gross {gm:.0f}%  ·  Net {nm:.0f}%  ·  "
+        f"benchmarks are sector-calibrated — see score detail above"
+    )
 
     # ── Debt & Liquidity ──
     parts = []
@@ -402,6 +405,105 @@ def build_score_context(sd, r: dict) -> dict:
     ctx["Capital Allocation"] = ("  ·  ".join(ca_parts)
                                   if ca_parts else "Insufficient data")
     return ctx
+
+
+# ─────────────────────────────────────────────
+# 12-TENET SCORECARD RENDERER
+# ─────────────────────────────────────────────
+
+_TENET_TITLES = {
+    1:  "Simple and understandable",
+    2:  "Consistent operating history",
+    3:  "Favorable long-term prospects",
+    4:  "Rational capital allocation",
+    5:  "Candid with shareholders",
+    6:  "Resists institutional imperative",
+    7:  "ROE >15% sustained",
+    8:  "Owner earnings / FCF positive",
+    9:  "High margins maintained",
+    10: "$1 market value per $1 retained",
+    11: "Intrinsic value determinable",
+    12: "Margin of safety ≥20%",
+}
+
+_TENET_GROUPS = {
+    "BUSINESS": [1, 2, 3],
+    "MANAGEMENT": [4, 5, 6],
+    "FINANCIAL": [7, 8, 9, 10],
+    "VALUE": [11, 12],
+}
+
+_BADGE = {
+    "Pass":     ("✅", "#2ecc71", "rgba(46,204,113,0.15)"),
+    "Partial":  ("⚠️",  "#f1c40f", "rgba(241,196,15,0.15)"),
+    "Fail":     ("❌", "#e74c3c", "rgba(231,76,60,0.15)"),
+    "Review":   ("🔍", "#888888", "rgba(100,100,100,0.10)"),
+    "Deferred": ("⏳", "#3498db", "rgba(52,152,219,0.12)"),
+    "Insufficient data": ("❓", "#888888", "rgba(100,100,100,0.10)"),
+}
+
+
+def render_tenet_scorecard(tenet_scores: dict) -> None:
+    """Render the 12-tenet Buffett scorecard as an HTML widget."""
+    # Tally automated grades
+    counts = {"Pass": 0, "Partial": 0, "Fail": 0}
+    for grade, _ in tenet_scores.values():
+        if grade in counts:
+            counts[grade] += 1
+
+    automated = counts["Pass"] + counts["Partial"] + counts["Fail"]
+    verdict_score = counts["Pass"] + counts["Partial"] * 0.5
+    if automated:
+        scaled = round(verdict_score / automated * 12)
+        if scaled >= 10:
+            verdict_label, verdict_color = "Strong Buy", "#2ecc71"
+        elif scaled >= 7:
+            verdict_label, verdict_color = "Investigate Further", "#f1c40f"
+        elif scaled >= 5:
+            verdict_label, verdict_color = "Cautious", "#e67e22"
+        elif scaled >= 3:
+            verdict_label, verdict_color = "Speculative", "#e74c3c"
+        else:
+            verdict_label, verdict_color = "Avoid", "#c0392b"
+    else:
+        verdict_label, verdict_color = "Insufficient data", "#888"
+
+    rows = [
+        '<div style="font-family:sans-serif;margin:0 0 24px 0;">',
+        f'<div style="margin-bottom:14px;font-size:0.88rem;color:#aaa;">'
+        f'Auto-graded: <b style="color:#2ecc71">{counts["Pass"]} Pass</b> · '
+        f'<b style="color:#f1c40f">{counts["Partial"]} Partial</b> · '
+        f'<b style="color:#e74c3c">{counts["Fail"]} Fail</b> · '
+        f'<span style="color:#888">4 require manual review</span> &nbsp;|&nbsp; '
+        f'Scaled verdict: <b style="color:{verdict_color}">{verdict_label}</b></div>',
+    ]
+
+    for group, tenet_ids in _TENET_GROUPS.items():
+        rows.append(
+            f'<div style="font-size:0.75rem;font-weight:700;letter-spacing:1.5px;'
+            f'color:#555;margin:16px 0 6px 0;">{group}</div>'
+        )
+        for tid in tenet_ids:
+            grade, evidence = tenet_scores[tid]
+            icon, color, bg = _BADGE.get(grade, _BADGE["Review"])
+            rows.append(
+                f'<div style="display:flex;gap:10px;align-items:flex-start;'
+                f'background:{bg};border-left:3px solid {color};'
+                f'border-radius:0 6px 6px 0;padding:8px 12px;margin-bottom:5px;">'
+                f'<div style="min-width:22px;font-size:1rem;line-height:1.4">{icon}</div>'
+                f'<div style="flex:1;">'
+                f'<span style="font-size:0.78rem;color:#888;">T{tid}</span> '
+                f'<span style="font-size:0.88rem;font-weight:600;color:#ddd;">'
+                f'{_TENET_TITLES[tid]}</span>'
+                f'<div style="font-size:0.80rem;color:#aaa;margin-top:3px;">{evidence}</div>'
+                f'</div>'
+                f'<div style="min-width:60px;text-align:right;font-size:0.78rem;'
+                f'color:{color};font-weight:700;">{grade}</div>'
+                f'</div>'
+            )
+
+    rows.append('</div>')
+    st.markdown("".join(rows), unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
@@ -581,7 +683,9 @@ if (analyse_clicked or auto_run) and ticker_input:
     verdict, colour  = get_verdict(r["Total Score"], m.get("MOS Status", ""))
     explanation_parts = build_explanation(sd, r, m, verdict)
 
-    # ── Verdict box ───────────────────────────
+    # ── Overall header card ───────────────────
+    from datetime import date as _date, datetime as _datetime
+
     palette = {
         "green":  ("#0d2e1a", "#2ecc71"),
         "yellow": ("#2e2200", "#f1c40f"),
@@ -589,83 +693,174 @@ if (analyse_clicked or auto_run) and ticker_input:
         "red":    ("#2e0d0d", "#e74c3c"),
     }
     bg, fg = palette[colour]
+    mos_status = m.get("MOS Status", "")
+
+    _mos_pill = {
+        "IN MOS ZONE":               ("#2ecc71", "#0a2010", "IN MOS ZONE"),
+        "APPROACHING MOS":           ("#f1c40f", "#2e2200", "APPROACHING MOS"),
+        "ABOVE INTRINSIC VALUE":     ("#e74c3c", "#2e0a0a", "ABOVE INTRINSIC VALUE"),
+        "DEBT EXCEEDS ENTERPRISE VALUE": ("#e74c3c", "#2e0a0a", "DEBT > EV"),
+        "NEGATIVE OWNER EARNINGS":   ("#e74c3c", "#2e0a0a", "NEGATIVE OE"),
+    }
+    pill_fg, pill_bg, pill_label = _mos_pill.get(
+        mos_status, ("#888", "#1a1a1a", mos_status or "NO DATA"))
+
+    score = r["Total Score"]
+    score_bar_html = (
+        f'<div style="display:flex;align-items:center;gap:10px;margin-top:10px;">'
+        f'<div style="flex:1;height:5px;background:rgba(255,255,255,0.08);border-radius:3px;">'
+        f'<div style="width:{score:.0f}%;height:100%;background:{fg};border-radius:3px;"></div>'
+        f'</div>'
+        f'<span style="color:{fg};font-size:0.82rem;font-weight:700;white-space:nowrap">'
+        f'{score:.0f} / 100</span></div>'
+    )
+
+    tags_html = ""
+    if sd.last_report_date:
+        try:
+            report_dt = _datetime.strptime(sd.last_report_date, "%Y-%m-%d").date()
+            days_ago  = (_date.today() - report_dt).days
+            age_str   = f"{days_ago // 30}mo" if days_ago >= 60 else f"{days_ago}d"
+            tag_col   = "#c8a84b" if days_ago > 90 else "#5a8a5a"
+            tags_html += (
+                f'<span style="font-size:0.70rem;color:{tag_col};border:1px solid {tag_col};'
+                f'border-radius:4px;padding:1px 7px;margin-left:6px;white-space:nowrap">'
+                f'Filing {sd.last_report_date} ({age_str} ago)</span>'
+            )
+        except Exception:
+            pass
+    if sd.financial_currency and sd.financial_currency != sd.currency:
+        tags_html += (
+            f'<span style="font-size:0.70rem;color:#c8a84b;border:1px solid #c8a84b;'
+            f'border-radius:4px;padding:1px 7px;margin-left:6px;white-space:nowrap">'
+            f'Financials in {sd.financial_currency}</span>'
+        )
+
     st.markdown(
-        f"""
-        <div style="
-            background:{bg};
-            border-left:6px solid {fg};
-            padding:22px 28px;
-            border-radius:8px;
-            margin-bottom:20px;
-        ">
-            <div style="color:{fg}; font-size:1.9rem; font-weight:800; letter-spacing:1px;">
-                {verdict}
-            </div>
-            <div style="color:#aaa; font-size:0.95rem; margin-top:6px;">
-                {r['Name']} &nbsp;·&nbsp; Score: {r['Total Score']:.0f} / 100
-                &nbsp;·&nbsp; {r['Sector']} &nbsp;·&nbsp; {r['Mkt Cap']}
-            </div>
-        </div>
-        """,
+        f'<div style="background:{bg};border-left:6px solid {fg};padding:20px 24px;'
+        f'border-radius:8px;margin-bottom:18px;">'
+        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">'
+        f'<div style="flex:1;min-width:0;">'
+        f'<div style="color:{fg};font-size:1.7rem;font-weight:800;letter-spacing:0.5px;'
+        f'line-height:1.2">{verdict}</div>'
+        f'<div style="color:#bbb;font-size:0.86rem;margin-top:5px;display:flex;'
+        f'flex-wrap:wrap;align-items:center;gap:2px;">'
+        f'<strong style="color:#ddd">{r["Name"]}</strong>'
+        f'<span style="color:#555">&nbsp;·&nbsp;</span>{r["Sector"]}'
+        f'<span style="color:#555">&nbsp;·&nbsp;</span>{r["Mkt Cap"]}'
+        f'{tags_html}</div>'
+        f'{score_bar_html}'
+        f'</div>'
+        f'<div style="flex-shrink:0;padding-top:4px;">'
+        f'<div style="background:{pill_bg};color:{pill_fg};font-size:0.75rem;font-weight:700;'
+        f'border:1px solid {pill_fg};border-radius:20px;padding:4px 12px;'
+        f'letter-spacing:0.5px;white-space:nowrap;text-align:center">{pill_label}</div>'
+        f'</div>'
+        f'</div></div>',
         unsafe_allow_html=True,
     )
 
-    # ── Foreign currency notice ───────────────
-    if sd.financial_currency and sd.financial_currency != sd.currency:
-        st.markdown(
-            f'<div style="font-size:0.82rem;color:#c8a84b;margin:-10px 0 10px 0;">'
-            f'⚠️ &nbsp;Financials reported in <strong>{sd.financial_currency}</strong>, '
-            f'trading in <strong>{sd.currency}</strong> — '
-            f'owner earnings converted to {sd.currency} at spot rate for DCF and yield calculations.'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    # ── Valuation metrics ─────────────────────
+    price     = m.get("Price")
+    mos_entry = m.get("MOS Entry") or 0.0
+    iv_low    = m.get("Intrinsic Low")
+    iv_high   = m.get("Intrinsic High")
+    ev_ebitda = r.get("EV/EBITDA")
+    fcf_conv  = r.get("FCF Conversion")
+    fwd_pe    = sd.forward_pe
 
-    # ── Report date warning ───────────────────
-    if sd.last_report_date:
-        from datetime import date, datetime
-        report_dt = datetime.strptime(sd.last_report_date, "%Y-%m-%d").date()
-        days_ago  = (date.today() - report_dt).days
-        months_ago = days_ago // 30
-        age_str = f"{months_ago} months ago" if months_ago > 1 else f"{days_ago} days ago"
-        staleness = "🟡" if days_ago > 90 else "🟢"
-        st.markdown(
-            f'<div style="font-size:0.82rem;color:#999;margin:-10px 0 14px 0;">'
-            f'{staleness} &nbsp;Most recent quarterly filing: <strong>{sd.last_report_date}</strong>'
-            f' &nbsp;({age_str}) &nbsp;— data may not reflect events after this date.'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+    if price is not None:
+        if mos_status == "DEBT EXCEEDS ENTERPRISE VALUE":
+            mc1, mc2 = st.columns([1, 3])
+            mc1.metric("Current Price", f"${price:.2f}")
+            mc2.warning(
+                "Net debt exceeds the owner earnings DCF enterprise value — "
+                "no positive equity value exists under this model."
+            )
+        elif m.get("OE/Share") is not None and iv_high:
+            # Primary valuation row
+            gap_pct = (price - mos_entry) / mos_entry * 100 if mos_entry else None
+            low_gap_pct = (iv_low - price) / price * 100 if iv_low and price else None
+            high_gap_pct = (iv_high - price) / price * 100 if iv_high and price else None
+            
+            vc1, vc2, vc3, vc4 = st.columns(4)
+            vc1.metric("Current Price",       f"${price:.2f}")
+            vc2.metric("MOS Entry (−30%)",    f"${mos_entry:.2f}",
+                       delta=f"{gap_pct:+.1f}% vs now" if gap_pct is not None else None,
+                       delta_color="inverse")
+            vc3.metric("Intrinsic Low (Bear)",  f"${iv_low:.2f}",
+                       delta=f"{low_gap_pct:+.1f}%" if low_gap_pct is not None else None)
+            vc4.metric("Intrinsic High (Bull)", f"${iv_high:.2f}",
+                       delta=f"{high_gap_pct:+.1f}%" if high_gap_pct is not None else None)
 
-    # ── Valuation snapshot ────────────────────
-    if m.get("Price") is not None and m.get("OE/Share") is not None:
-        status = m["MOS Status"]
-        if status == "IN MOS ZONE":
-            st.success("✅ IN MOS ZONE — trading below intrinsic value with a margin of safety")
-        elif status == "APPROACHING MOS":
-            st.warning("⚠️ APPROACHING MOS — near the buy zone, not there yet")
+            # Secondary multiples row
+            secondary = []
+            if ev_ebitda is not None:
+                secondary.append(("EV / EBITDA",     f"{ev_ebitda:.1f}×", None, None))
+            if fcf_conv is not None:
+                secondary.append(("FCF Conversion",  f"{fcf_conv:.0f}%",
+                                   "≥80% ✓" if fcf_conv >= 80 else "<80%",
+                                   "normal" if fcf_conv >= 80 else "off"))
+            if fwd_pe is not None:
+                secondary.append(("Forward P/E",     f"{fwd_pe:.1f}×", None, None))
+            if secondary:
+                sec_cols = st.columns(len(secondary))
+                for col, (lbl, val, delta, dc) in zip(sec_cols, secondary):
+                    if delta:
+                        col.metric(lbl, val, delta=delta, delta_color=dc)
+                    else:
+                        col.metric(lbl, val)
+
+            st.caption(
+                "DCF: 10-yr owner earnings · 9% discount rate · 3% terminal growth · 30% MOS buffer"
+            )
         else:
-            st.error("❌ ABOVE INTRINSIC VALUE — price exceeds our owner earnings DCF estimate")
-
-        price     = m["Price"]
-        mos_entry = m["MOS Entry"]
-        iv_low    = m["Intrinsic Low"]
-        iv_high   = m["Intrinsic High"]
-        gap_pct   = (price - mos_entry) / mos_entry * 100
-
-        vc1, vc2, vc3, vc4 = st.columns(4)
-        vc1.metric("Current Price",      f"${price:.2f}")
-        vc2.metric("Entry Point (−30%)", f"${mos_entry:.2f}",
-                   delta=f"{gap_pct:+.1f}% vs entry", delta_color="inverse")
-        vc3.metric("Intrinsic Value Low",  f"${iv_low:.2f}")
-        vc4.metric("Intrinsic Value High", f"${iv_high:.2f}")
-        st.caption("Owner Earnings DCF · 10-yr projection · 9% discount · 3% terminal growth · 30% MOS buffer")
-    elif m.get("Price") is not None:
-        st.info(f"Price: **${m['Price']}** — {m['MOS Status']}")
+            st.info(f"Price: **${price:.2f}** — {mos_status or 'Valuation unavailable'}")
 
     st.divider()
 
+    # ── 12-Tenet Buffett Scorecard ────────────
+    st.subheader("12-Tenet Buffett Scorecard")
+    st.caption(
+        "8 tenets are rule-based (auto-graded). "
+        "T1, T3, T5, T6 require qualitative judgment — marked Review. "
+        "T10 fetches price history (~1–2s)."
+    )
+
+    tenet_scores = r.get("tenet_scores", {})
+
+    with st.spinner("Fetching price history for T10 ($1 retained → $1 value)…"):
+        t10 = compute_tenet10(sd)
+    tenet_scores[10] = (t10["grade"], t10["evidence"])
+
+    ev_ebitda = r.get("EV/EBITDA")
+    fwd_pe    = sd.forward_pe
+    t11_parts = []
+    if ev_ebitda:
+        t11_parts.append(f"EV/EBITDA {ev_ebitda}×")
+    if fwd_pe:
+        t11_parts.append(f"fwd P/E {fwd_pe:.1f}×")
+    if m.get("Intrinsic Low"):
+        t11_parts.append(f"IV ${m['Intrinsic Low']}–${m['Intrinsic High']}")
+    t11_ev    = " · ".join(t11_parts) if t11_parts else "Insufficient valuation data"
+    t11_grade = "Pass" if m.get("OE/Share") and ev_ebitda else "Partial" if t11_parts else "Fail"
+    tenet_scores[11] = (t11_grade, t11_ev)
+
+    mos_status = m.get("MOS Status", "No data")
+    t12_grade  = ("Pass"    if mos_status == "IN MOS ZONE"
+                  else "Partial" if mos_status == "APPROACHING MOS"
+                  else "Fail")
+    t12_ev = mos_status
+    if m.get("Price") and m.get("MOS Entry"):
+        gap     = (m["Price"] - m["MOS Entry"]) / m["MOS Entry"] * 100
+        t12_ev += f" · price {gap:+.1f}% vs MOS entry ${m['MOS Entry']}"
+    tenet_scores[12] = (t12_grade, t12_ev)
+
+    render_tenet_scorecard(tenet_scores)
+    st.divider()
+
     # ── Buffett explanation ───────────────────
+    st.subheader("Warren Buffett's Take")
     render_chat_bubbles(explanation_parts)
     st.divider()
 
@@ -690,3 +885,76 @@ if (analyse_clicked or auto_run) and ticker_input:
         c2.progress(pts / weight, text=detail)
         if label in score_ctx:
             c2.caption(score_ctx[label])
+
+    rev_ctx = score_ctx.get("Revenue Consistency")
+    if rev_ctx and rev_ctx != "No revenue data":
+        st.caption(f"Revenue consistency (display only, not in 100-pt score): {rev_ctx}")
+
+    # ── Historical Owner Earnings Breakdown ───
+    if sd.owner_earnings_history:
+        st.divider()
+        st.subheader("Historical Owner Earnings")
+        st.caption("How the true cash flow was calculated each year (Formula: Operating Cash Flow - Smoothed CapEx - SBC).")
+        
+        n_cols = len(sd.owner_earnings_history)
+        labels = ["TTM / Most Recent"] + [f"{i} Yr(s) Ago" for i in range(1, n_cols)]
+        
+        def safe_get(lst, idx):
+            if lst and idx < len(lst) and lst[idx] is not None:
+                return lst[idx]
+            return 0
+            
+        hist_data = []
+        for i in range(n_cols):
+            hist_data.append({
+                "Period": labels[i],
+                "Operating Cash Flow": safe_get(sd.operating_cash_flow_history, i),
+                "- Smoothed CapEx": -abs(safe_get(sd.smoothed_capex_history, i)),
+                "- Stock-Based Comp": -abs(safe_get(sd.sbc_history, i)),
+                "Owner Earnings": safe_get(sd.owner_earnings_history, i)
+            })
+            
+        st.dataframe(
+            pd.DataFrame(hist_data).style.format({
+                "Operating Cash Flow": "${:,.0f}",
+                "- Smoothed CapEx": "${:,.0f}",
+                "- Stock-Based Comp": "${:,.0f}",
+                "Owner Earnings": "${:,.0f}"
+            }),
+            hide_index=True,
+            use_container_width=True
+        )
+
+    # ── DCF Calculation Breakdown ────────────────
+    if "Bull Breakdown" in m and m["Bull Breakdown"]:
+        st.divider()
+        st.subheader("DCF Calculation Breakdown")
+        st.caption("Step-by-step mathematical breakdown of the 3-Stage Fading Growth DCF model.")
+        
+        tab1, tab2 = st.tabs(["Bull Case", "Bear Case"])
+        
+        with tab1:
+            st.markdown(f"**Base Owner Earnings:** ${m.get('Base OE', 0):,.2f}")
+            df_bull = pd.DataFrame(m["Bull Breakdown"])
+            st.dataframe(
+                df_bull.style.format({
+                    "Future OE": "${:,.2f}",
+                    "Present Value": "${:,.2f}"
+                }), 
+                hide_index=True,
+                use_container_width=True
+            )
+            
+        with tab2:
+            st.markdown(f"**Base Owner Earnings:** ${m.get('Base OE', 0):,.2f}")
+            df_bear = pd.DataFrame(m["Bear Breakdown"])
+            st.dataframe(
+                df_bear.style.format({
+                    "Future OE": "${:,.2f}",
+                    "Present Value": "${:,.2f}"
+                }), 
+                hide_index=True,
+                use_container_width=True
+            )
+            
+        st.markdown(f"**Net Debt:** ${m.get('Net Debt', 0):,.2f} &nbsp;&nbsp;|&nbsp;&nbsp; **Shares Outstanding:** {m.get('Shares', 0):,.0f}")
