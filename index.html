@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>David Gao's Public Projects</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem;
+            background-color: #f9f9f9;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .project-list {
+            list-style: none;
+            padding: 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 2rem;
+        }
+        .project-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .project-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+        .project-card a {
+            text-decoration: none;
+            color: #3498db;
+            font-size: 1.2rem;
+            font-weight: bold;
+            display: block;
+            margin-bottom: 10px;
+        }
+        .project-card a:hover {
+            color: #2980b9;
+        }
+        .project-card p {
+            margin: 0;
+            color: #666;
+            font-size: 0.95rem;
+        }
+        .new-badge {
+            background-color: #e74c3c;
+            color: white;
+            font-size: 0.7rem;
+            padding: 3px 6px;
+            border-radius: 12px;
+            vertical-align: middle;
+            margin-left: 5px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>David Gao - Public Projects</h1>
+    <p>Welcome to my public projects directory. Click on any of the projects below to view them.</p>
+
+    <ul class="project-list">
+        <li class="project-card">
+            <a href="gta5-map/">GTA V Interactive Map <span class="new-badge">NEW</span></a>
+            <p>An interactive map for tracking GTA V collectibles with cloud sync across devices.</p>
+        </li>
+        <li class="project-card">
+            <a href="buffet_score/">Buffet Score</a>
+            <p>Project directory for Buffet Score.</p>
+        </li>
+        <li class="project-card">
+            <a href="daycare-receipts/">Daycare Receipts</a>
+            <p>Project directory for Daycare Receipts.</p>
+        </li>
+        <li class="project-card">
+            <a href="fog-of-exploration/">Fog of Exploration</a>
+            <p>Project directory for Fog of Exploration.</p>
+        </li>
+        <li class="project-card">
+            <a href="numerology-compatibility/">Numerology Compatibility</a>
+            <p>Project directory for Numerology Compatibility.</p>
+        </li>
+    </ul>
+</body>
+</html>
