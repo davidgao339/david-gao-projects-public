@@ -126,88 +126,90 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // === Marker Management & Cloud Sync ===
-    const CLOUD_API = "https://jsonblob.com/api/jsonBlob";
-    let syncId = localStorage.getItem("gta5_sync_id") || "";
+    // === Offline Save Code System (Bitmask Compression) ===
     const syncInput = document.getElementById("sync-id");
     const syncStatus = document.getElementById("sync-status");
-    if (syncInput && syncId) syncInput.value = syncId;
+
+    function getSaveCode() {
+        const allIds = Object.keys(markerInstances).map(Number).sort((a,b) => a-b);
+        let bitString = '';
+        for (let id of allIds) {
+            bitString += foundLocations.has(id) ? '1' : '0';
+        }
+        while (bitString.length % 8 !== 0) bitString += '0'; // Pad to byte boundary
+        
+        let binaryChars = '';
+        for (let i = 0; i < bitString.length; i += 8) {
+            binaryChars += String.fromCharCode(parseInt(bitString.substr(i, 8), 2));
+        }
+        // Use encodeURIComponent to make btoa safe
+        return btoa(binaryChars);
+    }
+
+    function loadSaveCode(code) {
+        try {
+            const binaryChars = atob(code);
+            let bitString = '';
+            for (let i = 0; i < binaryChars.length; i++) {
+                bitString += binaryChars.charCodeAt(i).toString(2).padStart(8, '0');
+            }
+            const allIds = Object.keys(markerInstances).map(Number).sort((a,b) => a-b);
+            
+            foundLocations.clear();
+            for (let i = 0; i < allIds.length; i++) {
+                if (bitString[i] === '1') foundLocations.add(allIds[i]);
+            }
+            saveProgress();
+            
+            // Update map UI
+            for (const locId in markerInstances) {
+                const idInt = parseInt(locId);
+                const isFound = foundLocations.has(idInt);
+                const m = markerInstances[locId].marker;
+                if (m._icon) {
+                    if (isFound) m._icon.classList.add('found');
+                    else m._icon.classList.remove('found');
+                }
+            }
+            return true;
+        } catch (e) {
+            console.error("Save code load error:", e);
+            return false;
+        }
+    }
 
     if (document.getElementById("btn-sync-new")) {
         document.getElementById("btn-sync-new").onclick = async () => {
+            const code = getSaveCode();
+            syncInput.value = code;
             try {
-                syncStatus.textContent = "Creating...";
-                const resp = await fetch(CLOUD_API, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                    body: JSON.stringify(Array.from(foundLocations))
-                });
-                const locationStr = resp.headers.get("Location");
-                if (locationStr) {
-                    syncId = locationStr.split("/").pop();
-                    localStorage.setItem("gta5_sync_id", syncId);
-                    syncInput.value = syncId;
-                    syncStatus.textContent = "Created! Copy ID.";
-                } else {
-                    syncStatus.textContent = "Error creating.";
-                }
-            } catch (e) { syncStatus.textContent = "Error."; }
+                await navigator.clipboard.writeText(code);
+                syncStatus.textContent = "Copied to clipboard!";
+            } catch (err) {
+                syncStatus.textContent = "Code generated! Please copy it.";
+            }
+            setTimeout(() => { syncStatus.textContent = ""; }, 3000);
         };
 
-        document.getElementById("btn-sync-pull").onclick = async () => {
-            const id = syncInput.value.trim();
-            if (!id) return;
-            try {
-                syncStatus.textContent = "Downloading...";
-                const resp = await fetch(`${CLOUD_API}/${id}`, { headers: { "Accept": "application/json" } });
-                if (resp.ok) {
-                    const data = await resp.json();
-                    foundLocations = new Set(data);
-                    saveProgress();
-                    for (const locId in markerInstances) {
-                        const idInt = parseInt(locId);
-                        const isFound = foundLocations.has(idInt);
-                        const m = markerInstances[locId].marker;
-                        
-                        // Toggle Leaflet DOM classes manually or re-render
-                        if (m._icon) {
-                            if (isFound) m._icon.classList.add('found');
-                            else m._icon.classList.remove('found');
-                        }
-                    }
-                    syncId = id;
-                    localStorage.setItem("gta5_sync_id", syncId);
-                    syncStatus.textContent = "Synced!";
-                } else { syncStatus.textContent = "Not found."; }
-            } catch (e) { syncStatus.textContent = "Error."; }
+        document.getElementById("btn-sync-pull").onclick = () => {
+            const code = syncInput.value.trim();
+            if (!code) return;
+            if (loadSaveCode(code)) {
+                syncStatus.textContent = "Save loaded successfully!";
+                setTimeout(() => { syncStatus.textContent = ""; }, 3000);
+            } else {
+                syncStatus.textContent = "Invalid save code.";
+                setTimeout(() => { syncStatus.textContent = ""; }, 3000);
+            }
         };
-    }
-
-    async function pushToCloud() {
-        if (!syncId) return;
-        try {
-            syncStatus.textContent = "Saving to cloud...";
-            await fetch(`${CLOUD_API}/${syncId}`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                body: JSON.stringify(Array.from(foundLocations))
-            });
-            syncStatus.textContent = "Cloud saved.";
-            setTimeout(() => { if (syncStatus.textContent === "Cloud saved.") syncStatus.textContent = ""; }, 2000);
-        } catch (e) { syncStatus.textContent = "Cloud save failed."; }
     }
 
     const STORAGE_KEY = 'gta5_found_locations_mapgenie';
     let foundLocations = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'));
     
-    let pushTimeout = null;
     function saveProgress() {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(foundLocations)));
         updateProgressUI();
-        if (syncId) {
-            clearTimeout(pushTimeout);
-            pushTimeout = setTimeout(pushToCloud, 1500);
-        }
     }
 
     const markerInstances = {};

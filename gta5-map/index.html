@@ -22,16 +22,14 @@
             </div>
             
             <div id="cloud-sync-panel">
-                <h4><i class="fas fa-cloud"></i> Cloud Sync</h4>
-                <p>Sync progress between phone and PC!</p>
-                <div class="sync-row">
-                    <input type="text" id="sync-id" placeholder="Paste Sync ID here...">
-                    <button id="btn-sync-pull"><i class="fas fa-download"></i></button>
+                <h4><i class="fas fa-save"></i> Save Code</h4>
+                <p>Copy this code to move your progress to another device.</p>
+                <textarea id="sync-id" placeholder="Paste your save code here..." rows="3" style="width:100%; resize:none; margin-bottom:5px; padding:5px; border-radius:4px; background:#0f1419; color:white; border:1px solid #2c3e50; font-family:monospace; font-size:11px;"></textarea>
+                <div class="sync-row" style="display:flex; gap:10px;">
+                    <button id="btn-sync-new" style="flex:1; background:#2ecc71; color:white;"><i class="fas fa-copy"></i> Copy Code</button>
+                    <button id="btn-sync-pull" style="flex:1; background:#3498db; color:white;"><i class="fas fa-file-import"></i> Load Code</button>
                 </div>
-                <div class="sync-row">
-                    <button id="btn-sync-new">Create New ID</button>
-                    <span id="sync-status"></span>
-                </div>
+                <div id="sync-status" style="text-align:center; font-size:12px; margin-top:5px; color:#2ecc71;"></div>
             </div>
             
             <div class="controls">
