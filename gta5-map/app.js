@@ -245,12 +245,20 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Sort categories alphabetically
         const sortedTypes = Object.keys(grouped).sort();
 
+        // === Category State Persistence ===
+        const CATEGORY_STORAGE_KEY = 'gta5_hidden_categories';
+        let hiddenCategories = new Set(JSON.parse(localStorage.getItem(CATEGORY_STORAGE_KEY) || '[]'));
+        
+        function saveCategoryState() {
+            localStorage.setItem(CATEGORY_STORAGE_KEY, JSON.stringify(Array.from(hiddenCategories)));
+        }
+
         const sidebarList = document.getElementById('category-list');
         sidebarList.innerHTML = ''; 
 
         for (const type of sortedTypes) {
             const data = grouped[type];
-            layerGroups[type] = L.featureGroup().addTo(map);
+            layerGroups[type] = L.featureGroup(); // Don't add to map immediately
             const color = data.color.startsWith('#') ? data.color : '#34495e';
             const iconClass = getIcon(type);
 
@@ -260,10 +268,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.className = 'category-checkbox';
-            checkbox.checked = true;
+            
+            // Check persistence state
+            const isHidden = hiddenCategories.has(type);
+            checkbox.checked = !isHidden;
+            if (!isHidden) {
+                map.addLayer(layerGroups[type]);
+            }
+
             checkbox.addEventListener('change', (e) => {
-                if (e.target.checked) map.addLayer(layerGroups[type]);
-                else map.removeLayer(layerGroups[type]);
+                if (e.target.checked) {
+                    map.addLayer(layerGroups[type]);
+                    hiddenCategories.delete(type);
+                } else {
+                    map.removeLayer(layerGroups[type]);
+                    hiddenCategories.add(type);
+                }
+                saveCategoryState();
             });
 
             const iconSpan = document.createElement('span');
